@@ -164,6 +164,41 @@ namespace Viswright.Tests
         }
 
         [Fact]
+        public void TheViewDrawsWhatIsInFrontAndTheCutTrimsWalls()
+        {
+            var scene = new Scene(cut: 50);
+            // A wall 100 tall at x = 200, facing a camera at the origin looking along +x.
+            scene.AddOpaque(new Vec3(200, -100, 0), new Vec3(200, 100, 0), new Vec3(200, 100, 100), new Rgb(200, 0, 0));
+            scene.AddOpaque(new Vec3(200, -100, 0), new Vec3(200, 100, 100), new Vec3(200, -100, 100), new Rgb(200, 0, 0));
+            var low = scene.Render(new Vec3(0, 0, 25), new Vec3(200, 0, 25), 64, 64, 60);
+            Assert.NotEqual(Scene.Background, low.Get(32, 32));
+            // Above the cut there is nothing left of the wall.
+            var high = scene.Render(new Vec3(0, 0, 80), new Vec3(200, 0, 80), 64, 64, 30);
+            Assert.Equal(Scene.Background, high.Get(32, 32));
+        }
+
+        [Fact]
+        public void ADoorwayWithAWindowAboveShowsWhereTheRoomsMeet()
+        {
+            if (AreaportalTests.Tools() is not { } tools)
+                return;
+            using var space = new Workspace();
+            string vmf = space.Write("maps/rooms.vmf", AreaportalTests.TwoRooms(window: true));
+            var map = VmfDocument.Load(vmf);
+            var compile = WorkCompile.Prepare(map, vmf, Path.Combine(space.Root, "c"), "rooms");
+            Assert.True(compile.RunVbsp(tools).Succeeded);
+            var bsp = BspSpace.Load(compile.Bsp);
+            var pass = new AreaportalPass(map);
+            var door = map.Entities.Single(e => e.Classname == "func_door");
+            var doorway = new Doorway(door, 0, 254, 258, 96, 160, 16, 112, Closes: true, StartOpen: false, WallA0: 248, WallA1: 264);
+
+            Assert.Empty(pass.SealedDoorways([doorway], SourceKit.Compile.PortalFile.Load(compile.Prt), bsp));
+            var path = Assert.Single(pass.JoinedBy).Value;
+            Assert.NotEmpty(path);
+            Assert.Contains("above the door", AreaportalPass.LeakKind(doorway, path));
+        }
+
+        [Fact]
         public void APlanShowsWallsAroundOpenGround()
         {
             if (AreaportalTests.Tools() is not { } tools)

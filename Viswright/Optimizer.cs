@@ -353,7 +353,7 @@ namespace Viswright
                 Log.Info($"slack: a standing point really sees {slackBefore.Seen.Where(v => v >= 0).Average():N0} triangles; " +
                     $"PVS slack {slackBefore.Average:P1} before" + (slackAfter != null ? $", {slackAfter.Average:P1} after" : "") + $" ({slackBefore.How})");
                 string page = ReviewOutput.Write(Path.Combine(Path.GetDirectoryName(copy)!, "review"), name, working, review, samples, baseline, lastVis,
-                    slackBefore, slackAfter, DecisionFile.PathFor(options.Source ?? options.Input));
+                    slackBefore, slackAfter, DecisionFile.PathFor(options.Source ?? options.Input), content.Opacity);
                 Log.Out($"review: {review.Items.Count} item(s); open {page}");
                 Lap("review");
             }
@@ -819,6 +819,13 @@ namespace Viswright
                 ? n : "door@" + ReviewLog.Anchor(ReviewLog.Bounds(door).Mins);
             foreach (var (door, reason) in pass.SkippedDoors)
             {
+                var joined = pass.JoinedBy.FirstOrDefault(kv => ReferenceEquals(kv.Key.Door, door));
+                if (joined.Key is { } d)
+                {
+                    review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, AreaportalPass.LeakKind(d, joined.Value), d.Mins, d.Maxs)
+                        { Detail = door.Classname, Data = DecisionFile.DoorwayData(d), Leak = joined.Value });
+                    continue;
+                }
                 var (lo, hi) = ReviewLog.Bounds(door);
                 review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, reason, lo, hi)
                     { Detail = door.Classname });

@@ -6,6 +6,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using SourceKit.Geometry;
 using SourceKit.Vmf;
 
 namespace Viswright
@@ -44,6 +45,7 @@ namespace Viswright
                     "collision" => CollisionCommand(args),
                     "model" => ModelCommand(args),
                     "render" => RenderCommand(args),
+                    "view" => ViewCommand(args),
                     "status" => Status(args),
                     "help" or "-help" or "--help" or "/?" => Usage(),
                     _ => Unknown(args[0]),
@@ -223,6 +225,51 @@ namespace Viswright
             return 0;
         }
 
+        /// <summary>
+        /// One ray-traced 3D picture of a compiled map: looking at -target from -distance away, turned -yaw
+        /// degrees round it and down -pitch degrees, with everything above -cut left out so rooms show.
+        /// With -vmf, doors and other brush entities are drawn, and the map's hints, areaportals and
+        /// occluders are outlined.
+        /// </summary>
+        private static int ViewCommand(string[] args)
+        {
+            RefuseUnknownFlags(args, new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "-threads", "-vmf", "-out", "-target", "-yaw", "-pitch", "-distance", "-cut", "-game" });
+            string bsp = Positional(args, 1) ?? throw new ArgumentException("view needs the BSP to draw.");
+            if (!File.Exists(bsp))
+                throw new FileNotFoundException($"The BSP {bsp} does not exist.", bsp);
+            static double Number(string[] args, string flag, double fallback) =>
+                TryGetFlagValue(args, flag, out string? v) ? double.Parse(v!, NumberStyles.Float, CultureInfo.InvariantCulture) : fallback;
+            static Vec3 Point(string text)
+            {
+                var p = text.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries).Select(s => double.Parse(s, NumberStyles.Float, CultureInfo.InvariantCulture)).ToArray();
+                return p.Length == 3 ? new Vec3(p[0], p[1], p[2]) : throw new ArgumentException($"A position is x,y,z, not '{text}'.");
+            }
+
+            var space = BspSpace.Load(bsp);
+            var target = TryGetFlagValue(args, "-target", out string? at) ? Point(at!) : (space.Mins + space.Maxs) / 2;
+            double? cut = TryGetFlagValue(args, "-cut", out string? c) ? (c == "none" ? (double?)null : double.Parse(c!, NumberStyles.Float, CultureInfo.InvariantCulture)) : target.Z + 256;
+            VmfDocument? map = TryGetFlagValue(args, "-vmf", out string? vmf) ? VmfDocument.Load(vmf!) : null;
+            var opacity = TryGetFlagValue(args, "-game", out string? game) ? GameContent.Open(game!).Opacity : null;
+
+            var scene = Review.Scene.FromMap(bsp, map, opacity, cut);
+            if (map != null)
+            {
+                foreach (var solid in map.World.Children("solid"))
+                    if (VmfBrush.Build(solid) is { } brush)
+                        foreach (var f in brush.Faces.Where(f => f.Material.Equals("TOOLS/TOOLSHINT", StringComparison.OrdinalIgnoreCase) && f.Winding != null))
+                            scene.AddPolygon(f.Winding!.Points, new Review.Rgb(235, 40, 210), 0.12);
+                foreach (var (cls, colour, alpha) in new[] { ("func_areaportal", new Review.Rgb(255, 140, 0), 0.4), ("func_areaportalwindow", new Review.Rgb(255, 140, 0), 0.4), ("func_occluder", new Review.Rgb(160, 60, 220), 0.3) })
+                    foreach (var b in map.Entities.Where(e => e.Classname == cls).SelectMany(e => e.Children("solid")).Select(VmfBrush.Build).OfType<VmfBrush>())
+                        scene.AddBox(b.Mins, b.Maxs, colour, alpha);
+            }
+            var (eye, look) = Review.Scene.Orbit(target, Number(args, "-distance", 1200), Number(args, "-yaw", 35), Number(args, "-pitch", 50));
+            string output = TryGetFlagValue(args, "-out", out string? o) ? o! : Path.ChangeExtension(bsp, null) + "_view.png";
+            scene.Render(eye, look, 1400, 900).SavePng(output);
+            Log.Out(output);
+            return 0;
+        }
+
         /// <summary>What Viswright reads from a model: for finding out why a prop was or was not changed.</summary>
         private static int ModelCommand(string[] args)
         {
@@ -386,6 +433,11 @@ namespace Viswright
                       Draw a plan of each floor of a compiled map, or with -from, what that spot's
                       PVS lets it see. -slack colours each place by how much of what its PVS lets
                       through cannot be seen from there, casting rays on the GPU (-cpu: on the CPU).
+
+                  viswright view <map.bsp> [-vmf <map.vmf>] [-game <folder>] [-target x,y,z] [-yaw D] [-pitch D]
+                                 [-distance N] [-cut z|none] [-out <file.png>]
+                      Draw the compiled map in 3D, ray-traced, cut away above -cut so rooms show;
+                      with -vmf, doors are drawn and hints, areaportals and occluders outlined.
 
                   viswright report <map.bsp>
                       Measure a compiled map's visibility: clusters and triangles each cluster

@@ -232,8 +232,20 @@ namespace Viswright.Review
         /// </summary>
         public static IEnumerable<(int Number, ReviewItem Item)> Highlights(IReadOnlyList<(int Number, ReviewItem Item)> items)
         {
+            // Within a pass, applied and refused take turns, refused doorways with a leak to show first.
             var queues = items.Where(i => i.Item.Pass is not ("fades" or "nodraw")).GroupBy(i => i.Item.Pass)
-                .Select(g => new Queue<(int, ReviewItem)>(g)).ToList();
+                .Select(g =>
+                {
+                    var applied = g.Where(i => i.Item.Status == ItemStatus.Applied).ToList();
+                    var other = g.Where(i => i.Item.Status != ItemStatus.Applied).OrderByDescending(i => i.Item.Leak.Count > 0).ToList();
+                    var turns = new List<(int, ReviewItem)>();
+                    for (int k = 0; k < Math.Max(applied.Count, other.Count); k++)
+                    {
+                        if (k < applied.Count) turns.Add(applied[k]);
+                        if (k < other.Count) turns.Add(other[k]);
+                    }
+                    return new Queue<(int, ReviewItem)>(turns);
+                }).ToList();
             while (queues.Any(q => q.Count > 0))
                 foreach (var q in queues.Where(q => q.Count > 0))
                     yield return q.Dequeue();

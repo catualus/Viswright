@@ -19,11 +19,15 @@ namespace Viswright.Review
     public static class ReviewOutput
     {
         public const int Thumbnails = 40;
+
+        /// <summary>Top items also drawn in 3D.</summary>
+        public const int Views = 24;
         private const int PlanPixels = 1600;
 
         /// <summary>Writes everything and returns the page's path.</summary>
         public static string Write(string folder, string name, VmfDocument working, ReviewLog log, SamplePoints samples,
-            WorkCompile baseline, WorkCompile? final, Slack? slackBefore = null, Slack? slackAfter = null, string decisionsPath = "")
+            WorkCompile baseline, WorkCompile? final, Slack? slackBefore = null, Slack? slackAfter = null, string decisionsPath = "",
+            MaterialOpacity? opacity = null)
         {
             if (Directory.Exists(folder))
                 Directory.Delete(folder, recursive: true);
@@ -45,9 +49,10 @@ namespace Viswright.Review
             var vis = BspVisibilityData.Load((final ?? baseline).Bsp);
             var plans = WritePlans(folder, space, samples, numbered, before, after, slack);
             var thumbs = WriteThumbnails(folder, space, samples, numbered, before, after);
+            var views = WriteViews(folder, (final ?? baseline).Bsp, working, opacity, numbered);
 
             string page = Path.Combine(folder, "review.html");
-            File.WriteAllText(page, Page(name, vmf, decisionsPath, numbered, plans, thumbs, after != null, before, after, samples, slackBefore, slackAfter));
+            File.WriteAllText(page, Page(name, vmf, decisionsPath, numbered, plans, thumbs, views, after != null, before, after, samples, slackBefore, slackAfter));
             return page;
         }
 
@@ -162,6 +167,51 @@ namespace Viswright.Review
             return files;
         }
 
+        /// <summary>
+        /// The top items in 3D: the map cut away a little above each item's floor, the item drawn in its
+        /// status colour, the openings that join a refused doorway's rooms in red, other items near it faint.
+        /// </summary>
+        private static Dictionary<int, string> WriteViews(string folder, string bsp, VmfDocument working, MaterialOpacity? opacity,
+            List<(int Number, ReviewItem Item)> items)
+        {
+            var files = new Dictionary<int, string>();
+            var highlights = ReviewVmf.Highlights(items).ToList();
+            var scenes = new Dictionary<double, Scene>();
+            foreach (var (number, item) in highlights.Take(Views))
+            {
+                // Cut a little above the item, so its room is open from above and its surroundings show.
+                double cut = Math.Ceiling((item.Mins.Z + 160) / 64) * 64;
+                if (!scenes.TryGetValue(cut, out var scene))
+                {
+                    scene = Scene.FromMap(bsp, working, opacity, cut);
+                    scene.MarkBase();
+                    scenes[cut] = scene;
+                }
+                scene.ClearOverlays();
+                var centre = item.Centre;
+                foreach (var (_, other) in highlights.Where(h => h.Number != number && (h.Item.Centre - centre).Length < 1024))
+                    scene.AddBox(other.Mins, other.Maxs, Colour(other.Status), 0.12);
+                var (lo, hi) = Grow(item.Mins, item.Maxs, 8);
+                scene.AddBox(lo, hi, Colour(item.Status), 0.5);
+                foreach (var w in item.Leak)
+                    scene.AddPolygon(w.Points, new Rgb(235, 30, 30), 0.45);
+                double size = (item.Maxs - item.Mins).Length;
+                var (eye, target) = scene.Aim(centre, Math.Clamp(size * 1.6, 600, 4000), pitch: 42);
+                string file = Path.Combine("items", $"{number}-3d.png");
+                scene.Render(eye, target, 960, 600).SavePng(Path.Combine(folder, file));
+                files[number] = file.Replace('\\', '/');
+            }
+            return files;
+
+            static Rgb Colour(ItemStatus s) => s switch { ItemStatus.Applied => PlanRenderer.Applied, ItemStatus.Rejected => PlanRenderer.Rejected, _ => PlanRenderer.Suggested };
+            static (Vec3, Vec3) Grow(Vec3 lo, Vec3 hi, double min)
+            {
+                var size = hi - lo;
+                var g = new Vec3(Math.Max(0, min - size.X) / 2, Math.Max(0, min - size.Y) / 2, Math.Max(0, min - size.Z) / 2);
+                return (lo - g, hi + g);
+            }
+        }
+
         private static double Percentile(IEnumerable<double> values, double p)
         {
             var sorted = values.OrderBy(v => v).ToList();
@@ -171,7 +221,7 @@ namespace Viswright.Review
         private static string H(string? s) => WebUtility.HtmlEncode(s ?? "");
 
         private static string Page(string name, string vmf, string decisionsPath, List<(int Number, ReviewItem Item)> items, List<Plan> plans,
-            Dictionary<int, string> thumbs, bool hasAfter, double[] before, double[]? after, SamplePoints samples, Slack? slackBefore, Slack? slackAfter)
+            Dictionary<int, string> thumbs, Dictionary<int, string> views, bool hasAfter, double[] before, double[]? after, SamplePoints samples, Slack? slackBefore, Slack? slackAfter)
         {
             var html = new StringBuilder();
             html.Append($$"""
@@ -195,6 +245,7 @@ namespace Viswright.Review
                 figure img { width:100%; height:auto; image-rendering:pixelated; display:block; }
                 figcaption { font-size:13px; color:var(--soft); margin-top:4px; }
                 img.thumb { width:192px; height:192px; image-rendering:pixelated; }
+                img.thumb3d { width:288px; height:180px; }
                 .wrap { overflow-x:auto; }
                 .key span { display:inline-block; margin-right:16px; }
                 .sw { display:inline-block; width:12px; height:12px; vertical-align:-1px; margin-right:6px; border-radius:2px; }
@@ -267,7 +318,8 @@ namespace Viswright.Review
                 string status = item.Status.ToString().ToLowerInvariant();
                 string gain = item.Gain is { } g ? (g >= 0 ? $"{g:P1} less" : $"{-g:P1} more") : "";
                 var c = item.Centre;
-                string thumb = thumbs.TryGetValue(number, out var t) ? $"<a href=\"{t}\"><img class=\"thumb\" src=\"{t}\" alt=\"Item {number}\" loading=\"lazy\"></a>" : "";
+                string thumb = (thumbs.TryGetValue(number, out var t) ? $"<a href=\"{t}\"><img class=\"thumb\" src=\"{t}\" alt=\"Item {number} from above\" loading=\"lazy\"></a>" : "")
+                    + (views.TryGetValue(number, out var v3) ? $" <a href=\"{v3}\"><img class=\"thumb3d\" src=\"{v3}\" alt=\"Item {number} in 3D\" loading=\"lazy\"></a>" : "");
                 html.Append($"<tr><td class=\"n\">{number}</td><td>{H(item.Pass)}</td><td class=\"{status}\">{status}</td><td>{H(item.Reason)}</td>" +
                     $"<td>{gain}</td><td><code>setpos {c.X:0} {c.Y:0} {c.Z:0}</code></td><td class=\"n\">{(cameraOf.TryGetValue(number, out int cam) ? cam : "")}</td>" +
                     $"<td>{H(item.Detail)}</td><td>{thumb}</td></tr>");

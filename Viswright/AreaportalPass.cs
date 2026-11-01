@@ -61,6 +61,13 @@ namespace Viswright
         /// <summary>Why doorways got a portal that never closes, for the report.</summary>
         public Dictionary<string, int> OpenOnly { get; } = new();
 
+        /// <summary>
+        /// For each doorway dropped because its two sides meet some other way, the openings between leaves
+        /// that join them - the shortest way round, with every other portal shut - for showing where the
+        /// window or gap is.
+        /// </summary>
+        public Dictionary<Doorway, List<Winding>> JoinedBy { get; } = new();
+
         /// <summary>Each door passed over, and why, for the review.</summary>
         public List<(VmfNode Door, string Reason)> SkippedDoors { get; } = [];
 
@@ -194,6 +201,22 @@ namespace Viswright
                     return a < 0 || b < 0 || Find(a) == Find(b);
                 }).ToList();
                 dropped = leaky.Count;
+                if (leaky.Count > 0)
+                {
+                    // The way round each: a breadth-first walk over the open openings between clusters.
+                    var next = new List<(int Portal, int Cluster)>[portals.ClusterCount];
+                    for (int i = 0; i < next.Length; i++) next[i] = [];
+                    for (int i = 0; i < portals.Portals.Count; i++)
+                        if (!closed.Contains(i))
+                        {
+                            var p = portals.Portals[i];
+                            next[p.ClusterA].Add((i, p.ClusterB));
+                            next[p.ClusterB].Add((i, p.ClusterA));
+                        }
+                    foreach (var d in leaky)
+                        if (sides[d] is var (from, to) && from >= 0 && to >= 0)
+                            JoinedBy[d] = Path(next, from, to).Select(i => portals.Portals[i].Winding).ToList();
+                }
                 foreach (var d in leaky)
                 {
                     kept.Remove(d);
@@ -203,6 +226,43 @@ namespace Viswright
             } while (dropped > 0);
 
             return kept;
+        }
+
+        /// <summary>
+        /// Where a refused doorway's two sides meet: an opening in the same wall beside or above the door
+        /// (a window, a transom, a gap), another way close by, or a long way round through other rooms.
+        /// </summary>
+        public static string LeakKind(Doorway d, IReadOnlyList<Winding> path)
+        {
+            double wallLo = (double.IsNaN(d.WallA0) ? d.A0 : d.WallA0) - 2, wallHi = (double.IsNaN(d.WallA1) ? d.A1 : d.WallA1) + 2;
+            foreach (var w in path)
+            {
+                var c = w.Centre;
+                double a = d.NormalAxis == 0 ? c.X : c.Y, along = d.NormalAxis == 0 ? c.Y : c.X;
+                if (a >= wallLo && a <= wallHi && Math.Abs(along - (d.W0 + d.W1) / 2) < 768 && c.Z > d.Z0 - 64 && c.Z < d.Z1 + 512)
+                    return c.Z > d.Z1 + 8 ? "an opening above the door in the same wall (a transom or gap) joins the rooms"
+                        : "an opening beside the door in the same wall (a window or gap) joins the rooms";
+            }
+            return path.Count <= 6 ? "the rooms meet another way close by (another doorway or gap)" : "the rooms meet a long way round, through other rooms";
+        }
+
+        private static List<int> Path(List<(int Portal, int Cluster)>[] next, int from, int to)
+        {
+            var via = new Dictionary<int, (int Portal, int Cluster)> { [from] = (-1, -1) };
+            var queue = new Queue<int>();
+            queue.Enqueue(from);
+            while (queue.Count > 0 && !via.ContainsKey(to))
+            {
+                int c = queue.Dequeue();
+                foreach (var (portal, other) in next[c])
+                    if (via.TryAdd(other, (portal, c)))
+                        queue.Enqueue(other);
+            }
+            var path = new List<int>();
+            for (int c = to; via.TryGetValue(c, out var step) && step.Portal >= 0; c = step.Cluster)
+                path.Add(step.Portal);
+            path.Reverse();
+            return path;
         }
 
         /// <summary>The cluster a little way out from the wall on one side of a doorway, or -1 if that is solid.</summary>

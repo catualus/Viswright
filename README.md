@@ -175,6 +175,19 @@ With **Write a review** (`-review`), a run writes a `review` folder beside the c
 `viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z] [-slack]` draws the plans of any compiled map,
 or with `-from`, what that spot's PVS lets it see.
 
+**In 3D.** The top 24 items are also drawn in 3D, ray-traced from the compiled map: the world as
+compiled, doors and other brush entities from the VMF (glass see-through), cut away a little above the
+item so its room opens from above, with the item in its status colour and items near it faint.
+`viswright view <map.bsp> [-vmf <map.vmf>] [-game <folder>] [-target x,y,z] [-yaw D] [-pitch D]
+[-distance N] [-cut z|none]` draws any spot of any compiled map the same way, outlining its hints,
+areaportals and occluders.
+
+For a doorway refused because its two rooms meet another way, the review shows *where*: the openings
+between leaves that join the rooms when every other portal is shut, drawn in red, and the reason names
+the kind. On rp_downtown_meowy, 109 of 228 framed doorways are refused this way: 50 through an opening
+beside the door in the same wall (a shop window, mostly), 13 through one above it, 32 through another
+doorway or gap close by, and 14 a long way round through other rooms.
+
 **PVS slack.** The review also measures how much of what each place's PVS lets through cannot actually be
 seen from there. From every standing point, rays are cast in 65,536 directions against the world's
 triangles (displacements included; glass and tool faces let them through) and the faces they meet first
@@ -276,7 +289,8 @@ viswright report <map.bsp>
 viswright diff <a.vmf> <b.vmf>
 viswright collision <a.bsp> <b.bsp>
 viswright model <models/x.mdl> -game <folder>
-viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z] [-out <folder>]
+viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z] [-slack] [-out <folder>]
+viswright view <map.bsp> [-vmf <map.vmf>] [-game <folder>] [-target x,y,z] [-yaw D] [-pitch D] [-distance N] [-cut z|none]
 viswright status <map.vmf>
 ```
 

@@ -27,6 +27,9 @@ namespace Viswright.Review
         /// <summary>What applying the item again needs beyond its id and box, as <see cref="DecidedItem.Data"/> keeps it.</summary>
         public IReadOnlyDictionary<string, double> Data { get; init; } = new Dictionary<string, double>();
 
+        /// <summary>For a doorway refused because its rooms meet another way: the openings between leaves that join them.</summary>
+        public IReadOnlyList<Winding> Leak { get; init; } = [];
+
         /// <summary>Ids of the map objects the item added or changed, when it was applied.</summary>
         public IReadOnlyList<long> NodeIds { get; init; } = [];
 
