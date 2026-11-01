@@ -47,24 +47,39 @@ namespace Viswright.Review
             return page;
         }
 
+        /// <summary>Written by hand rather than by reflection: Compile Pal ships Viswright trimmed.</summary>
         private static void WriteJson(string path, List<(int Number, ReviewItem Item)> items, SamplePoints samples)
         {
-            static double[] V(Vec3 v) => [Math.Round(v.X, 1), Math.Round(v.Y, 1), Math.Round(v.Z, 1)];
             var cameras = ReviewVmf.Highlights(items).Take(ReviewVmf.CameraCount).Select((h, i) => (h.Number, i)).ToDictionary(t => t.Number, t => t.i);
-            var rows = items.Select(t => new
+            using var file = File.Create(path);
+            using var json = new Utf8JsonWriter(file, new JsonWriterOptions { Indented = true });
+            void Vector(string name, Vec3 v)
             {
-                number = t.Number,
-                id = t.Item.Id,
-                pass = t.Item.Pass,
-                status = t.Item.Status.ToString().ToLowerInvariant(),
-                reason = t.Item.Reason,
-                detail = t.Item.Detail,
-                gain = t.Item.Gain is { } g ? Math.Round(g, 4) : (double?)null,
-                mins = V(t.Item.Mins),
-                maxs = V(t.Item.Maxs),
-                camera = cameras.TryGetValue(t.Number, out int c) ? c + 1 : (int?)null,
-            });
-            File.WriteAllText(path, JsonSerializer.Serialize(new { items = rows }, new JsonSerializerOptions { WriteIndented = true }));
+                json.WriteStartArray(name);
+                json.WriteNumberValue(Math.Round(v.X, 1));
+                json.WriteNumberValue(Math.Round(v.Y, 1));
+                json.WriteNumberValue(Math.Round(v.Z, 1));
+                json.WriteEndArray();
+            }
+            json.WriteStartObject();
+            json.WriteStartArray("items");
+            foreach (var (number, item) in items)
+            {
+                json.WriteStartObject();
+                json.WriteNumber("number", number);
+                json.WriteString("id", item.Id);
+                json.WriteString("pass", item.Pass);
+                json.WriteString("status", item.Status.ToString().ToLowerInvariant());
+                json.WriteString("reason", item.Reason);
+                if (item.Detail != null) json.WriteString("detail", item.Detail);
+                if (item.Gain is { } g) json.WriteNumber("gain", Math.Round(g, 4));
+                Vector("mins", item.Mins);
+                Vector("maxs", item.Maxs);
+                if (cameras.TryGetValue(number, out int c)) json.WriteNumber("camera", c + 1);
+                json.WriteEndObject();
+            }
+            json.WriteEndArray();
+            json.WriteEndObject();
         }
 
         private sealed record Plan(double Z, string Items, string Before, string? After, string? Change);
