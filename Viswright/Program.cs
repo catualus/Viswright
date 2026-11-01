@@ -64,7 +64,7 @@ namespace Viswright
         private static int Optimize(string[] args)
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-vbsp", "-vvis", "-game" };
+                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-vbsp", "-vvis", "-game" };
             RefuseUnknownFlags(args, known);
 
             string input = Positional(args, 1) ?? throw new ArgumentException("optimize needs the VMF to read.");
@@ -73,7 +73,14 @@ namespace Viswright
             Toolchain? tools = null;
             if (TryGetFlagValue(args, "-vbsp", out string? vbsp) && TryGetFlagValue(args, "-vvis", out string? vvis)
                 && TryGetFlagValue(args, "-game", out string? game))
-                tools = new Toolchain(vbsp!, vvis!, game!);
+            {
+                // The block size the real compile chops the map on: hints and splits depend on it.
+                string vbspFlags = TryGetFlagValue(args, "-blocksize", out string? block)
+                    ? (int.TryParse(block, NumberStyles.Integer, CultureInfo.InvariantCulture, out int b) && b >= 0
+                        ? $"-blocksize {b}" : throw new ArgumentException($"-blocksize needs a whole number of units, not '{block}'."))
+                    : "";
+                tools = new Toolchain(vbsp!, vvis!, game!, vbspFlags);
+            }
 
             var result = Optimizer.Run(new OptimizeOptions
             {
@@ -90,6 +97,11 @@ namespace Viswright
                     : 6,
                 Slim = HasFlag(args, "-slim"),
                 LuaPaths = AllFlagValues(args, "-luapath"),
+                Hints = HasFlag(args, "-hints"),
+                HintMinutes = TryGetFlagValue(args, "-hinttime", out string? minutes)
+                    ? (double.TryParse(minutes, NumberStyles.Float, CultureInfo.InvariantCulture, out double m) && m > 0 && m <= 240 ? m
+                        : throw new ArgumentException($"-hinttime needs a number of minutes from 1 to 240, not '{minutes}'."))
+                    : 15,
                 Tools = tools,
             });
 
@@ -263,7 +275,8 @@ namespace Viswright
 
                   viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N]
                                      [-areaportals] [-detail] [-nodraw] [-fades [-fadepixels N]]
-                                     [-slim [-luapath <folder>]...] -vbsp <exe> -vvis <exe> -game <folder>
+                                     [-slim [-luapath <folder>]...] [-hints [-hinttime M]] [-blocksize N]
+                                     -vbsp <exe> -vvis <exe> -game <folder>
                       Optimise a copy of the map and hand it to the rest of the compile. The map
                       itself is never written. -source names the map as queued when <map.vmf> is an
                       earlier step's copy; -dryrun reports without handing anything on.
@@ -272,6 +285,9 @@ namespace Viswright
                       -fades gives static props with no fade one where they shrink to N pixels
                       (default 6). -slim turns entities that do nothing an entity can do into
                       static props and func_detail, unless Lua looks their class up.
+                      -hints tries hints over open ground at a few heights and keeps each only
+                      where it lowers what is visible, searching for at most M minutes (15).
+                      -blocksize is the block size the real VBSP compile uses.
                       -detail makes small and complex world brushes func_detail; -nodraw makes
                       faces hidden against opaque brushes nodraw. Both are checked by compiling
                       with the compilers named, and undone if the map leaks, its collision
@@ -321,7 +337,7 @@ namespace Viswright
         }
 
         private static readonly HashSet<string> ValueFlags = new(StringComparer.OrdinalIgnoreCase)
-            { "-source", "-threads", "-vbsp", "-vvis", "-game", "-fadepixels", "-luapath" };
+            { "-source", "-threads", "-vbsp", "-vvis", "-game", "-fadepixels", "-luapath", "-hinttime", "-blocksize" };
 
         private static List<string> AllFlagValues(string[] args, string flag)
         {

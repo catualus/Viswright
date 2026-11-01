@@ -12,14 +12,14 @@ namespace Viswright.Tests
         private const string ToolsFolder = @"C:\Users\Catualus\Documents\Tools++";
         private const string GameFolder = @"C:\Program Files (x86)\Steam\steamapps\common\GarrysMod\garrysmod";
 
-        private static Toolchain? Tools() =>
+        internal static Toolchain? Tools() =>
             File.Exists(Path.Combine(ToolsFolder, "vbsp++.exe")) && Directory.Exists(GameFolder)
                 ? new Toolchain(Path.Combine(ToolsFolder, "vbsp++.exe"), Path.Combine(ToolsFolder, "vvis++.exe"), GameFolder)
                 : null;
 
         private static int nextId = 100;
 
-        private static string Box(double x0, double y0, double z0, double x1, double y1, double z1, string material = "DEV/DEV_MEASUREWALL01A")
+        internal static string Box(double x0, double y0, double z0, double x1, double y1, double z1, string material = "DEV/DEV_MEASUREWALL01A")
         {
             string P(double x, double y, double z) => $"({x} {y} {z})";
             string[] planes =

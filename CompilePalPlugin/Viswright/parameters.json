@@ -48,6 +48,35 @@
     "Description": "A folder of Lua - a gamemode or addons outside the game folder - to check before Fewer entities converts anything. The game's own gamemodes and addons are always checked."
   },
   {
+    "Name": "Hints over open ground",
+    "Parameter": " -hints",
+    "Description": "Try hint brushes across open streets and courtyards at a few heights above the ground, and keep one only where it lowers what players standing there can see. Each height costs a VBSP and VVIS compile, so this needs VVIS++ and stops searching when Hint search minutes run out. Hints are never solid or drawn and cannot leak; the set is undone unless the whole map sees less.",
+    "Warning": "Adds several compiles to every run - about a minute each on a large map - until the search time runs out."
+  },
+  {
+    "Name": "Hint search minutes",
+    "Parameter": " -hinttime",
+    "CanHaveValue": true,
+    "Value": "15",
+    "Options": [
+      "5",
+      "15",
+      "30"
+    ],
+    "Description": "How long Hints over open ground may spend compiling to search. Only used with Hints over open ground."
+  },
+  {
+    "Name": "VBSP block size",
+    "Parameter": " -blocksize",
+    "CanHaveValue": true,
+    "Value": "1024",
+    "Options": [
+      "1024",
+      "4096"
+    ],
+    "Description": "The -blocksize the VBSP step uses, so Viswright's checking compiles cut the map the same way. Leave off for VBSP's default of 1024; stock VBSP has no -blocksize."
+  },
+  {
     "Name": "Report only",
     "Parameter": " -dryrun",
     "Description": "Work out and report every change, but compile the map as it is."

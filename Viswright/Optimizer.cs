@@ -37,6 +37,12 @@ namespace Viswright
         /// <summary>Pass F: turn entities that do nothing an entity can do into static props and func_detail.</summary>
         public bool Slim { get; init; }
 
+        /// <summary>Pass D: horizontal hints over open ground, each kept only if it measurably helps.</summary>
+        public bool Hints { get; init; }
+
+        /// <summary>How long the hint search may spend compiling, in minutes.</summary>
+        public double HintMinutes { get; init; } = 15;
+
         /// <summary>Folders of Lua to scan for class lookups, on top of the game's own gamemodes and addons.</summary>
         public IReadOnlyList<string> LuaPaths { get; init; } = [];
 
@@ -87,7 +93,7 @@ namespace Viswright
                 Log.Info($"{relocated} instance path(s) re-pointed so the copy finds the same files");
 
             int detailed = 0, nodrawn = 0, portals = 0;
-            if (options.Detail || options.Nodraw || options.Areaportals || options.Fades || options.Slim)
+            if (options.Detail || options.Nodraw || options.Areaportals || options.Fades || options.Slim || options.Hints)
                 (detailed, nodrawn, portals) = RunPasses(options, working, copy, guard);
 
             var changes = VmfDiff.Compare(original, working);
@@ -129,7 +135,11 @@ namespace Viswright
             if (baseline == null)
                 return (0, 0, 0);
 
-            var samples = SamplePoints.Find(BspSpace.Load(baseline.Bsp));
+            var baselineSpace = BspSpace.Load(baseline.Bsp);
+            var reachable = SamplePoints.Reachable(working, SourceKit.Compile.PortalFile.Load(baseline.Prt), baselineSpace);
+            var samples = SamplePoints.Find(baselineSpace, reachable);
+            if (reachable == null)
+                Log.Info("measure: the map has no spawn point, so every floor counts as somewhere a player stands");
             var before = CompileMeasure.Of(baseline, samples);
             var collision = BspSpace.Load(baseline.Bsp).CollisionShapes(CollisionMask);
             Log.Check($"before: {before.Describe()}");
@@ -216,6 +226,9 @@ namespace Viswright
                 RunFades(options, working, reference, content, guard, Path.Combine(work, "fades.txt"));
             if (options.Slim)
                 RunSlimming(options, working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard);
+            // Last: it is measured against the map with every other change made.
+            if (options.Hints)
+                RunHints(options, working, copy, Path.Combine(work, "hints"), name, tools, collision, samples, guard);
 
             return (detailed, nodrawn, portals);
         }
@@ -322,6 +335,159 @@ namespace Viswright
             pass.Declare(guard);
             Log.Check($"slim: {props} prop_dynamic made prop_static, {brushes} func_brush made func_detail: {pass.Converted.Count} fewer entities" +
                 (back > 0 ? $" ({back} put back: VBSP would not take their model as static)" : ""));
+        }
+
+        /// <summary>Gain a square's own standing points must see for its hint to be kept.</summary>
+        private const double HintGain = 0.02;
+
+        /// <summary>How much less the whole map must see for the hints to be worth their extra portals.</summary>
+        private const double HintMapGain = 0.01;
+
+        /// <summary>
+        /// Pass D: compiles once as the map stands, then once per height with a hint over every square of
+        /// open ground, and gives each square the height that cut what its points see the most, if by
+        /// <see cref="HintGain"/>. The squares kept are compiled together, any that stopped helping are
+        /// dropped, and the set is kept only if the whole map sees at least <see cref="HintMapGain"/> less
+        /// and VVIS has no more than 15%
+        /// more portals to work through.
+        /// </summary>
+        private static void RunHints(OptimizeOptions options, VmfDocument working, string copy, string folder, string name, Toolchain tools,
+            List<BspSpace.BrushShape> collision, SamplePoints samples, ChangeGuard guard)
+        {
+            string vvis = Path.GetFileName(tools.Vvis);
+            if (!vvis.Contains("++", StringComparison.Ordinal) && !vvis.Contains("plusplus", StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Warn("hints: skipped, the search compiles the map several times and needs VVIS++ to do it in reasonable time");
+                return;
+            }
+            var budget = TimeSpan.FromMinutes(options.HintMinutes);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+
+            var reference = WorkCompile.Prepare(working, copy, folder + "-reference", name);
+            if (!reference.RunVbsp(tools).Succeeded || reference.Leaked || !reference.RunVvis(tools).Succeeded)
+            {
+                Log.Warn("hints: skipped, the map does not compile cleanly before them");
+                return;
+            }
+            var before = CompileMeasure.Of(reference, samples);
+            var referenceCost = CompileMeasure.PerPoint(reference, samples);
+            var squares = HintPass.Squares(samples, BspSpace.Load(reference.Bsp), _ => false);
+            Log.Info($"hints: {squares.Count} square(s) of open ground to try, {budget.TotalMinutes:0} minute(s) to search");
+            if (squares.Count == 0)
+                return;
+
+            var pass = new HintPass(working);
+            var best = new Dictionary<HintSquare, (double Height, double Gain)>();
+            TimeSpan slowest = reference.VbspRun!.Elapsed + reference.VvisRun!.Elapsed;
+            for (int round = 0; ; round++)
+            {
+                var tries = squares.Select(s => (Square: s, Height: s.Heights().Skip(round).FirstOrDefault(double.NaN)))
+                    .Where(t => !double.IsNaN(t.Height)).ToList();
+                if (tries.Count == 0)
+                    break;
+                // Leave time for the compile that proves the squares chosen.
+                if (clock.Elapsed + slowest * 2 > budget)
+                {
+                    Log.Info($"hints: time is up after {round} height(s)");
+                    break;
+                }
+                foreach (var (square, height) in tries)
+                    pass.Place(square, height);
+                var compile = Compile(working, copy, folder, name, tools);
+                pass.RevertAll();
+                if (compile == null)
+                {
+                    Log.Warn($"hints: height {round + 1} did not compile cleanly; skipped");
+                    continue;
+                }
+                slowest = TimeSpan.FromTicks(Math.Max(slowest.Ticks, (compile.VbspRun!.Elapsed + compile.VvisRun!.Elapsed).Ticks));
+                var cost = CompileMeasure.PerPoint(compile, samples);
+                int better = 0;
+                foreach (var (square, height) in tries)
+                {
+                    double gain = Gain(square, referenceCost, cost);
+                    if (gain >= HintGain && gain > best.GetValueOrDefault(square).Gain)
+                    {
+                        best[square] = (height, gain);
+                        better++;
+                    }
+                }
+                Log.Info($"hints: height {round + 1}: {better} of {tries.Count} square(s) see at least {HintGain:P0} less");
+            }
+
+            if (best.Count == 0)
+            {
+                Log.Check("hints: none kept, no square saw less with a hint");
+                return;
+            }
+
+            // Together, hints can undo each other; drop any square that stops helping and try again.
+            foreach (var (square, (height, _)) in best)
+                pass.Place(square, height);
+            WorkCompile? final = null;
+            for (int round = 1; round <= 3 && pass.Placed.Count > 0; round++)
+            {
+                final = Compile(working, copy, folder, name, tools);
+                if (final == null)
+                    break;
+                var cost = CompileMeasure.PerPoint(final, samples);
+                var lost = pass.Placed.Keys.Where(s => Gain(s, referenceCost, cost) < HintGain / 2).ToList();
+                if (lost.Count == 0)
+                    break;
+                foreach (var square in lost)
+                    pass.Remove(square);
+                Log.Info($"hints: {lost.Count} square(s) stopped helping alongside the others and lost their hint");
+                final = null;
+            }
+
+            string? reason = final == null
+                ? (pass.Placed.Count == 0 ? "none helped alongside the others" : "the chosen hints did not compile cleanly or settle")
+                : BspSpace.CollisionDifferences(BspSpace.Load(final.Bsp).CollisionShapes(CollisionMask), collision) is > 0 and var n
+                    ? $"collision changed ({n} brushes)" : null;
+            CompileMeasure? after = final == null ? null : CompileMeasure.Of(final, samples);
+            if (reason == null && after != null)
+                reason = after.SampledTriangles > before.SampledTriangles * (1 - HintMapGain)
+                        ? $"the map as a whole sees under {HintMapGain:P0} less: {after.SampledTriangles:N0} triangles from a standing position against {before.SampledTriangles:N0}"
+                    : after.Portals > before.Portals * 1.15 ? $"VVIS would have {after.Portals:N0} portals to work through against {before.Portals:N0}"
+                    : after.Faces >= 65536 * 85 / 100 || after.LeafFaces >= 65536 * 85 / 100 ? "the map would be within 15% of the face or leaf face limit"
+                    : null;
+            if (reason != null)
+            {
+                pass.RevertAll();
+                Log.Warn($"hints: undone, {reason}");
+                return;
+            }
+
+            pass.Declare(guard);
+            string list = Path.Combine(folder, "hints.txt");
+            File.WriteAllLines(list, pass.Placed.OrderBy(kv => kv.Key.X).ThenBy(kv => kv.Key.Y)
+                .Select(kv => $"{kv.Key.Mins.X:0} {kv.Key.Mins.Y:0} to {kv.Key.Maxs.X:0} {kv.Key.Maxs.Y:0} at z {kv.Value.Height:0}: {best[kv.Key].Gain:P1} less seen there"));
+            Log.Check($"hints: {pass.Placed.Count} kept; triangles visible from a standing position {before.SampledTriangles:N0} -> {after!.SampledTriangles:N0} " +
+                $"({1 - after.SampledTriangles / before.SampledTriangles:P1} less), portals {before.Portals:N0} -> {after.Portals:N0}, " +
+                $"vvis {before.VvisTime.TotalSeconds:0}s -> {after.VvisTime.TotalSeconds:0}s; list in {list}");
+        }
+
+        /// <summary>A VBSP and VVIS compile of the map as it stands, or null if either failed or it leaked.</summary>
+        private static WorkCompile? Compile(VmfDocument working, string copy, string folder, string name, Toolchain tools)
+        {
+            var compile = WorkCompile.Prepare(working, copy, folder, name);
+            if (!compile.RunVbsp(tools).Succeeded || compile.Leaked || !compile.RunVvis(tools).Succeeded)
+                return null;
+            return compile;
+        }
+
+        /// <summary>How much less a square's points see in <paramref name="cost"/> than in <paramref name="reference"/>.</summary>
+        private static double Gain(HintSquare square, double[] reference, double[] cost)
+        {
+            double was = 0, now = 0;
+            foreach (int i in square.Points)
+            {
+                if (reference[i] < 0 || cost[i] < 0)
+                    continue;
+                was += reference[i];
+                now += cost[i];
+            }
+            return was <= 0 ? 0 : 1 - now / was;
         }
 
         /// <summary>Entities in a compiled map's entity lump, and props in its static prop lump.</summary>

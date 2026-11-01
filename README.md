@@ -5,8 +5,8 @@ mappers do by hand - func_detail, nodraw on hidden faces, areaportals in doorway
 fade distances - on a copy of the map, proves each change with the real compilers, and backs out
 anything that does not pay for itself.
 
-**Status: phase 4.** Five passes, all opt-in while in beta: **Areaportals in doorways**, **Make detail**,
-**Hide covered faces**, **Fade static props** and **Fewer entities**.
+**Status: phase 5.** Six passes, all opt-in while in beta: **Areaportals in doorways**, **Make detail**,
+**Hide covered faces**, **Fade static props**, **Fewer entities** and **Hints over open ground**.
 Every compile audits the map, runs the ticked passes, checks the copy differs only in what they are
 allowed to change, and hands it to VBSP; a second step measures the compiled map's visibility after
 VVIS.
@@ -59,11 +59,27 @@ Lua folders named, look entities up by is left alone. After compiling, the entit
 the static prop count rise by exactly the number converted, or the pass is undone; a prop VBSP still
 refuses (its copy of a model can differ from the one Viswright reads) is put back.
 
-"More visible" is measured at about 30,000 standing positions, found once from the first compile:
-points at eye height above solid ground on a 128-unit grid. Two compiles do not share clusters, but
-they share these points, so the triangles visible from each can be compared directly.
+**Hints over open ground** (`-hints`, `-hinttime M`) tries a hint brush across each 1,024-unit square of
+open ground - streets, courtyards, anywhere with 384 units or more of sky above where players stand - at
+heights from 192 to 960 units above the ground, below the sky. Every square is tried at the same step
+above its own ground in one compile, so each height costs one VBSP and one VVIS run; a square keeps the
+height that cut what its own standing points see the most, if by 2% or more. The squares kept are
+compiled together and any that stopped helping lose their hint. The set is kept only if the whole map
+sees at least 1% less, VVIS has no more than 15% more portals to work through, and collision is
+unchanged. A hint is toolshint on top and toolsskip on every other face: not solid, never drawn, unable
+to leak. The search needs VVIS++ and stops when its time (15 minutes by default) runs out.
 
-Measured on 2026-11-01 with vbsp++ and vvis++ (default VBSP options):
+"More visible" is measured at the points a player can stand: positions at eye height above solid
+ground on a 128-unit grid, found once from the first compile, in open space joined to a spawn point or
+a teleport destination. A sealed room nobody can reach - prominence has a 16,384-unit box above the
+city - is left out. Two compiles do not share clusters, but they share these points, so the triangles
+visible from each can be compared directly.
+
+Checking compiles use VBSP's default block size unless `-blocksize N` gives the one the real compile
+uses. It matters: on these maps a block size of 4,096 gives a fifth fewer clusters than 1,024, and a
+pass that helps at one can hurt at the other.
+
+Measured on 2026-11-01 with vbsp++ and vvis++ (default VBSP options, every floor counted):
 
 | | rp_downtown_prominence_d | rp_downtown_meowy |
 | --- | --- | --- |
@@ -101,6 +117,25 @@ Fades and Fewer entities (2026-11-01, 6 pixels):
 | prop_dynamic made prop_static | 30 | 23 |
 | Left as entities | named, parented, physgun-movable, physics models | the same, and 51 models not compiled for static use |
 | func_brush made func_detail | 0 (all never solid, named, or without lightmap shadows) | 0 |
+
+Every pass, measured as the maps really compile (2026-11-01, `-blocksize 4096`, only places a player
+can reach):
+
+| | rp_downtown_prominence_d | rp_downtown_meowy |
+| --- | --- | --- |
+| Before | 5,338 clusters, 13,489 portals, 6,472 triangles visible, VVIS 22.6 s | 5,169 clusters, 12,925 portals, 6,941 triangles, VVIS 20.5 s |
+| Areaportals | 69 added; 6,484 triangles visible, 6,327 with the new doors shut | 74 added; 6,972, 6,798 with them shut |
+| Make detail | undone: 6,626 triangles visible against 6,484 | undone: 7,084 against 6,972 |
+| Hide covered faces | 219 faces | 92 faces |
+| Fades / Fewer entities | 374 props / 30 entities | 29 props / 23 entities |
+| Hints over open ground | undone: 0.3% less seen (6,441 against 6,460), under the 1% bar | undone: 0.8% less (6,913 against 6,968) |
+| Time | 12 minutes, 6 of them the hint search | 11 minutes |
+
+At the block size these maps are really compiled with, Make detail makes more visible from the
+streets, and the run undoes it - the figures from default options above do not carry over. Hints do
+not pay on either map: about 15 of 120 squares see 2% less on their own, but together they save under
+1%. The streets are walled in up to the sky, so there is little over the rooftops for a hint to cut
+off, and VVIS++'s leaves are already tight.
 
 In Garry's Mod, the optimised prominence loads with all 191 portal numbers in use. At a storefront door
 given a portal, wireframe rendering shows nothing behind the shut door and the whole plaza once it opens.
@@ -151,8 +186,9 @@ compile that would go over.
 ## Commands
 
 ```
-viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N]
-                   [-detail] [-nodraw] -vbsp <exe> -vvis <exe> -game <folder>
+viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N] [-areaportals]
+                   [-detail] [-nodraw] [-fades [-fadepixels N]] [-slim [-luapath <folder>]...]
+                   [-hints [-hinttime M]] [-blocksize N] -vbsp <exe> -vvis <exe> -game <folder>
 viswright audit <map.vmf>
 viswright report <map.bsp>
 viswright diff <a.vmf> <b.vmf>
