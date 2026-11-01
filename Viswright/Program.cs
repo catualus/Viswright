@@ -43,6 +43,7 @@ namespace Viswright
                     "diff" => Diff(args),
                     "collision" => CollisionCommand(args),
                     "model" => ModelCommand(args),
+                    "render" => RenderCommand(args),
                     "status" => Status(args),
                     "help" or "-help" or "--help" or "/?" => Usage(),
                     _ => Unknown(args[0]),
@@ -64,7 +65,7 @@ namespace Viswright
         private static int Optimize(string[] args)
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-vbsp", "-vvis", "-game" };
+                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-review", "-vbsp", "-vvis", "-game" };
             RefuseUnknownFlags(args, known);
 
             string input = Positional(args, 1) ?? throw new ArgumentException("optimize needs the VMF to read.");
@@ -98,6 +99,7 @@ namespace Viswright
                 Slim = HasFlag(args, "-slim"),
                 LuaPaths = AllFlagValues(args, "-luapath"),
                 Hints = HasFlag(args, "-hints"),
+                Review = HasFlag(args, "-review"),
                 HintMinutes = TryGetFlagValue(args, "-hinttime", out string? minutes)
                     ? (double.TryParse(minutes, NumberStyles.Float, CultureInfo.InvariantCulture, out double m) && m > 0 && m <= 240 ? m
                         : throw new ArgumentException($"-hinttime needs a number of minutes from 1 to 240, not '{minutes}'."))
@@ -142,6 +144,58 @@ namespace Viswright
             {
                 Log.Error($"an areaportal is numbered {report.HighestPortalNumber}; Garry's Mod refuses to load a map with one above {VisReport.GmodMaxPortalNumber}");
                 return 1;
+            }
+            return 0;
+        }
+
+        /// <summary>
+        /// Plans of a compiled map, one per floor: the slice at eye height with world and detail brushes,
+        /// or with -from, what that spot's PVS lets it see. -vmf limits the floors to places a player can
+        /// reach from a spawn point.
+        /// </summary>
+        private static int RenderCommand(string[] args)
+        {
+            RefuseUnknownFlags(args, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "-threads", "-vmf", "-out", "-from" });
+            string bsp = Positional(args, 1) ?? throw new ArgumentException("render needs the BSP to draw.");
+            if (!File.Exists(bsp))
+                throw new FileNotFoundException($"The BSP {bsp} does not exist.", bsp);
+            string output = TryGetFlagValue(args, "-out", out string? o) ? o! : Path.ChangeExtension(bsp, null) + "_render";
+            Directory.CreateDirectory(output);
+
+            var space = BspSpace.Load(bsp);
+            Func<int, bool>? reachable = null;
+            string prt = Path.ChangeExtension(bsp, "prt");
+            if (TryGetFlagValue(args, "-vmf", out string? vmf) && File.Exists(prt))
+                reachable = SamplePoints.Reachable(SourceKit.Vmf.VmfDocument.Load(vmf!), SourceKit.Compile.PortalFile.Load(prt), space);
+            var samples = SamplePoints.Find(space, reachable);
+            if (samples.Points.Count == 0)
+                throw new InvalidOperationException("The map has nowhere a player can stand.");
+
+            if (TryGetFlagValue(args, "-from", out string? at))
+            {
+                var parts = at!.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3 || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double x)
+                    || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double y)
+                    || !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out double z))
+                    throw new ArgumentException($"-from needs a position as \"x y z\" or x,y,z, not '{at}'.");
+                var spot = new SourceKit.Geometry.Vec3(x, y, z);
+                var view = Review.PlanView.Around(samples.Points.Where(p => Math.Abs(p.Z - z) <= 160).DefaultIfEmpty(spot), z, 512, 1600);
+                var canvas = Review.PlanRenderer.Base(space, view, out var open);
+                Review.PlanRenderer.Pvs(canvas, open, view, space, BspVisibilityData.Load(bsp), spot);
+                string file = Path.Combine(output, string.Create(CultureInfo.InvariantCulture, $"pvs-{x:0}_{y:0}_{z:0}.png"));
+                canvas.SavePng(file);
+                Log.Out(file);
+                return 0;
+            }
+
+            int level = 0;
+            foreach (double z in Review.PlanRenderer.Levels(samples))
+            {
+                var view = Review.PlanView.Around(samples.Points.Where(p => Math.Abs(p.Z - z) <= 96), z, 512, 1600);
+                var canvas = Review.PlanRenderer.Base(space, view, out _);
+                string file = Path.Combine(output, $"level{++level}.png");
+                canvas.SavePng(file);
+                Log.Out(string.Create(CultureInfo.InvariantCulture, $"{file}: eye height {z:0}, {view.Scale:0} units a pixel"));
             }
             return 0;
         }
@@ -287,7 +341,8 @@ namespace Viswright
                       static props and func_detail, unless Lua looks their class up.
                       -hints tries hints over open ground at a few heights and keeps each only
                       where it lowers what is visible, searching for at most M minutes (15).
-                      -blocksize is the block size the real VBSP compile uses.
+                      -blocksize is the block size the real VBSP compile uses. -review writes a
+                      review beside the copy: a Hammer VMF of every item, plans and a page.
                       -detail makes small and complex world brushes func_detail; -nodraw makes
                       faces hidden against opaque brushes nodraw. Both are checked by compiling
                       with the compilers named, and undone if the map leaks, its collision
@@ -295,6 +350,10 @@ namespace Viswright
 
                   viswright audit <map.vmf>
                       Report what could be optimised, changing nothing.
+
+                  viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z] [-out <folder>]
+                      Draw a plan of each floor of a compiled map, or with -from, what that spot's
+                      PVS lets it see.
 
                   viswright report <map.bsp>
                       Measure a compiled map's visibility: clusters and triangles each cluster
@@ -337,7 +396,7 @@ namespace Viswright
         }
 
         private static readonly HashSet<string> ValueFlags = new(StringComparer.OrdinalIgnoreCase)
-            { "-source", "-threads", "-vbsp", "-vvis", "-game", "-fadepixels", "-luapath", "-hinttime", "-blocksize" };
+            { "-source", "-threads", "-vbsp", "-vvis", "-game", "-fadepixels", "-luapath", "-hinttime", "-blocksize", "-vmf", "-out", "-from" };
 
         private static List<string> AllFlagValues(string[] args, string flag)
         {

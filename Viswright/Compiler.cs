@@ -35,6 +35,12 @@ namespace Viswright
         public string Prt => Path.ChangeExtension(Vmf, "prt");
         public string Lin => Path.ChangeExtension(Vmf, "lin");
 
+        /// <summary>Time spent waiting on compilers since the process started, for the timing summary.</summary>
+        public static TimeSpan CompilerTime => TimeSpan.FromTicks(Interlocked.Read(ref compilerTicks));
+        public static int CompilerRuns => compilerRuns;
+        private static long compilerTicks;
+        private static int compilerRuns;
+
         public CompileRun? VbspRun { get; private set; }
         public CompileRun? VvisRun { get; private set; }
 
@@ -59,6 +65,13 @@ namespace Viswright
                 File.Delete(stale);
 
             string vmf = Path.Combine(folder, name + ".vmf");
+            // With no instance to re-point, the map is written as it is: copying a large map costs more
+            // than a second, every compile.
+            if (!map.Entities.Any(e => string.Equals(e.Classname, "func_instance", StringComparison.OrdinalIgnoreCase)))
+            {
+                map.Save(vmf);
+                return new WorkCompile(vmf);
+            }
             // A copy, so moving this one does not re-point the caller's document.
             var copy = VmfDocument.Parse(map.ToString(), map.HasByteOrderMark);
             VmfRelocation.RetargetInstances(copy, loadedFrom, vmf);
@@ -107,6 +120,8 @@ namespace Viswright
                 process.WaitForExit();
             SourceKitConcurrency.ThrowIfCancelled();
 
+            Interlocked.Add(ref compilerTicks, watch.Elapsed.Ticks);
+            Interlocked.Increment(ref compilerRuns);
             lock (gate)
                 return new CompileRun(process.ExitCode, output.ToList(), watch.Elapsed);
         }

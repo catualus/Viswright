@@ -77,6 +77,11 @@
     "Description": "The -blocksize the VBSP step uses, so Viswright's checking compiles cut the map the same way. Leave off for VBSP's default of 1024; stock VBSP has no -blocksize."
   },
   {
+    "Name": "Write a review",
+    "Parameter": " -review",
+    "Description": "Write a review of everything Viswright did and considered beside the optimised copy: a VMF to open in Hammer++ with every change, refusal and a visibility heatmap in a Viswright visgroup and a camera on each top item, plans of every floor showing what is visible before and after, a picture of each top item, and a page listing them all with the reason for each. Adds one VBSP and VVIS compile and the time to draw the plans."
+  },
+  {
     "Name": "Report only",
     "Parameter": " -dryrun",
     "Description": "Work out and report every change, but compile the map as it is."

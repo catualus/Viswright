@@ -61,6 +61,12 @@ namespace Viswright
         /// <summary>Why doorways got a portal that never closes, for the report.</summary>
         public Dictionary<string, int> OpenOnly { get; } = new();
 
+        /// <summary>Each door passed over, and why, for the review.</summary>
+        public List<(VmfNode Door, string Reason)> SkippedDoors { get; } = [];
+
+        /// <summary>Why each doorway's portal never closes, for the review.</summary>
+        public Dictionary<VmfNode, string> OpenOnlyDoors { get; } = new();
+
         /// <summary>The doorways of every door with no areaportal of its own, one per opening.</summary>
         public List<Doorway> FindDoorways(BspSpace compiled, GameContent content)
         {
@@ -89,21 +95,24 @@ namespace Viswright
 
                 var doorway = Find(door, compiled, content, frames, out string? reason, out string? openOnly);
                 if (openOnly != null)
+                {
                     OpenOnly[openOnly] = OpenOnly.GetValueOrDefault(openOnly) + 1;
+                    OpenOnlyDoors[door] = openOnly;
+                }
                 if (doorway == null)
                 {
-                    Skip(reason!);
+                    Skip(reason!, door);
                     continue;
                 }
                 if (existing.Any(b => Overlaps(b.Mins, b.Maxs, doorway.Mins, doorway.Maxs)))
                 {
-                    Skip("an areaportal is already in the opening");
+                    Skip("an areaportal is already in the opening", door);
                     continue;
                 }
                 // Double doors share one opening: one portal, closing with the first.
                 if (found.Any(d => Overlaps(d.Mins, d.Maxs, doorway.Mins, doorway.Maxs)))
                 {
-                    Skip("shares its opening with another door");
+                    Skip("shares its opening with another door", door);
                     continue;
                 }
                 found.Add(doorway);
@@ -111,7 +120,11 @@ namespace Viswright
             return found;
         }
 
-        private void Skip(string reason) => Skipped[reason] = Skipped.GetValueOrDefault(reason) + 1;
+        private void Skip(string reason, VmfNode door)
+        {
+            Skipped[reason] = Skipped.GetValueOrDefault(reason) + 1;
+            SkippedDoors.Add((door, reason));
+        }
 
         /// <summary>
         /// The doorways whose portals would each divide two areas, worked out without compiling.
@@ -176,7 +189,7 @@ namespace Viswright
                 {
                     kept.Remove(d);
                     var (a, b) = sides[d];
-                    Skip(a < 0 || b < 0 ? "no open space on both sides of the doorway" : "the rooms either side are joined another way (a window, a gap, another door)");
+                    Skip(a < 0 || b < 0 ? "no open space on both sides of the doorway" : "the rooms either side are joined another way (a window, a gap, another door)", d.Door);
                 }
             } while (dropped > 0);
 
@@ -435,10 +448,15 @@ namespace Viswright
         }
 
         /// <summary>Removes the portals for <paramref name="keep"/>'s complement, and any name given to a door that loses its portal.</summary>
-        public void KeepOnly(IReadOnlySet<VmfNode> keep)
+        /// <summary>Portals taken out again during the run, and why, for the review.</summary>
+        public List<(Doorway Doorway, VmfNode Door, string Reason)> Dropped { get; } = [];
+
+        public void KeepOnly(IReadOnlySet<VmfNode> keep, string? why = null)
         {
             foreach (var entry in added.Where(a => !keep.Contains(a.Portal)).ToList())
             {
+                if (why != null)
+                    Dropped.Add((entry.Doorway, entry.Door, why));
                 map.Root.Remove(entry.Portal);
                 if (entry.NamedDoor && entry.Door.GetPair("targetname") is { } pair)
                     entry.Door.Remove(pair);
@@ -446,7 +464,7 @@ namespace Viswright
             }
         }
 
-        public void RevertAll() => KeepOnly(new HashSet<VmfNode>());
+        public void RevertAll(string? why = null) => KeepOnly(new HashSet<VmfNode>(), why);
 
         /// <summary>What the pass may have changed: its own portal entities, and the names it gave doors.</summary>
         public void Declare(ChangeGuard guard)

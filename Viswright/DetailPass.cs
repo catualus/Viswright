@@ -28,6 +28,12 @@ namespace Viswright
         public DetailPass(VmfDocument map) => this.map = map;
 
         public IReadOnlyCollection<VmfNode> Moved => moved.Keys;
+
+        /// <summary>The brush each moved solid was built as.</summary>
+        public VmfBrush BrushOf(VmfNode solid) => moved[solid];
+
+        /// <summary>Brushes put back as world during the run, and why, for the review.</summary>
+        public List<(VmfNode Solid, VmfBrush Brush, string Reason)> Returned { get; } = [];
         public long? EntityId => entity?.Id;
 
         /// <summary>
@@ -35,7 +41,8 @@ namespace Viswright
         /// a compile of the same map, brushes that form the map's outer shell are left out: each
         /// becoming detail would be a leak, found one compile at a time.
         /// </summary>
-        public static List<(VmfNode Solid, VmfBrush Brush)> Candidates(VmfDocument map, BspSpace? compiled = null)
+        public static List<(VmfNode Solid, VmfBrush Brush)> Candidates(VmfDocument map, BspSpace? compiled = null,
+            List<(VmfBrush Brush, string Reason)>? excluded = null)
         {
             var frames = PortalFrames(map);
             var ignored = IgnoredVisgroups(map);
@@ -57,9 +64,15 @@ namespace Viswright
                     continue;
                 // An areaportal has to be sealed by world brushes; detail around it leaks the area.
                 if (frames.Any(f => Touches(f, brush)))
+                {
+                    excluded?.Add((brush, "it frames an areaportal, which only world brushes can seal"));
                     continue;
+                }
                 if (compiled != null && Seals(brush, compiled))
+                {
+                    excluded?.Add((brush, "it faces the void or keeps two areas apart, so as detail it would leak"));
                     continue;
+                }
 
                 result.Add((solid, brush));
             }
@@ -95,28 +108,30 @@ namespace Viswright
             var hit = moved.Where(kv => points.Any(p => DistanceToBox(p, kv.Value.Mins, kv.Value.Maxs) <= reach))
                 .Select(kv => kv.Key).ToList();
             foreach (var solid in hit)
-                Revert(solid);
+                Revert(solid, "a leak ran past it, so it stays world to seal the map");
             return hit.Count;
         }
 
         /// <summary>Puts back every moved brush <paramref name="back"/> picks. Returns how many went back.</summary>
-        public int RevertWhere(Func<VmfBrush, bool> back)
+        public int RevertWhere(Func<VmfBrush, bool> back, Func<VmfBrush, string>? why = null)
         {
-            var hit = moved.Where(kv => back(kv.Value)).Select(kv => kv.Key).ToList();
-            foreach (var solid in hit)
-                Revert(solid);
+            var hit = moved.Where(kv => back(kv.Value)).ToList();
+            foreach (var (solid, brush) in hit)
+                Revert(solid, why?.Invoke(brush));
             return hit.Count;
         }
 
         /// <summary>Puts every moved brush back and removes the func_detail entity.</summary>
-        public void RevertAll()
+        public void RevertAll(string? why = null)
         {
             foreach (var solid in moved.Keys.ToList())
-                Revert(solid);
+                Revert(solid, why);
         }
 
-        private void Revert(VmfNode solid)
+        private void Revert(VmfNode solid, string? why = null)
         {
+            if (why != null)
+                Returned.Add((solid, moved[solid], why));
             entity!.Remove(solid);
             map.World.Add(solid);
             moved.Remove(solid);

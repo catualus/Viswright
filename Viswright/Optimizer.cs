@@ -5,6 +5,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using SourceKit.Vmf;
+using Viswright.Review;
 
 namespace Viswright
 {
@@ -45,6 +46,9 @@ namespace Viswright
 
         /// <summary>Folders of Lua to scan for class lookups, on top of the game's own gamemodes and addons.</summary>
         public IReadOnlyList<string> LuaPaths { get; init; } = [];
+
+        /// <summary>Write the review: a Hammer VMF of every item, pictures of the map, and a page listing them.</summary>
+        public bool Review { get; init; }
 
         /// <summary>The compilers every pass is checked with. Needed when any pass is on.</summary>
         public Toolchain? Tools { get; init; }
@@ -130,6 +134,7 @@ namespace Viswright
 
             string name = Path.GetFileNameWithoutExtension(copy);
             string work = Path.Combine(Path.GetDirectoryName(copy)!, "work");
+            var setup = System.Diagnostics.Stopwatch.StartNew();
 
             var baseline = Baseline(working, copy, Path.Combine(work, "baseline"), name, tools);
             if (baseline == null)
@@ -143,10 +148,23 @@ namespace Viswright
             var before = CompileMeasure.Of(baseline, samples);
             var collision = BspSpace.Load(baseline.Bsp).CollisionShapes(CollisionMask);
             Log.Check($"before: {before.Describe()}");
+            Log.Info($"time: baseline and measuring {setup.Elapsed.TotalSeconds:0}s, of which {WorkCompile.CompilerTime.TotalSeconds:0}s in {WorkCompile.CompilerRuns} compiler run(s)");
 
             int detailed = 0, nodrawn = 0, portals = 0;
             CompileMeasure current = before;
             var content = GameContent.Open(tools.GameFolder);
+            var review = new ReviewLog();
+            var timings = new List<(string Step, TimeSpan Total, TimeSpan Compiling, int Runs)>();
+            var stepClock = System.Diagnostics.Stopwatch.StartNew();
+            var stepCompiling = WorkCompile.CompilerTime;
+            int stepRuns = WorkCompile.CompilerRuns;
+            void Lap(string step)
+            {
+                timings.Add((step, stepClock.Elapsed, WorkCompile.CompilerTime - stepCompiling, WorkCompile.CompilerRuns - stepRuns));
+                stepClock.Restart();
+                stepCompiling = WorkCompile.CompilerTime;
+                stepRuns = WorkCompile.CompilerRuns;
+            }
 
             // Before detail, so the detail pass sees the new portals and leaves their frames as world.
             // Each pass is judged against the map as the passes before it left it.
@@ -154,18 +172,20 @@ namespace Viswright
             if (options.Areaportals)
             {
                 portals = RunAreaportals(working, copy, Path.Combine(work, "areaportals"), name, tools, baseline, samples, collision, content, guard,
-                    out var portalCompile);
+                    review, out var portalCompile);
                 if (portalCompile is { VvisRun.Succeeded: true })
                 {
                     reference = portalCompile;
                     current = CompileMeasure.Of(portalCompile, samples);
                 }
+                Lap("areaportals");
             }
 
             if (options.Detail)
             {
                 var pass = new DetailPass(working);
-                var candidates = DetailPass.Candidates(working, BspSpace.Load(reference.Bsp));
+                var excluded = new List<(VmfBrush Brush, string Reason)>();
+                var candidates = DetailPass.Candidates(working, BspSpace.Load(reference.Bsp), excluded);
                 pass.Apply(candidates);
                 Log.Info($"detail: {candidates.Count} world brush(es) are candidates");
 
@@ -174,7 +194,7 @@ namespace Viswright
                 {
                     compile.RunVvis(tools);
                     if (compile.VvisRun!.Succeeded)
-                        compile = KeepDetailWhereNoMoreIsSeen(pass, compile, reference, samples, working, copy, Path.Combine(work, "detail"), name, tools);
+                        compile = KeepDetailWhereNoMoreIsSeen(pass, compile, reference, samples, working, copy, Path.Combine(work, "detail"), name, tools, review);
                 }
                 if (compile != null && pass.Moved.Count > 0)
                 {
@@ -182,7 +202,7 @@ namespace Viswright
                     string? reason = Rejection(compile, collision, current, after);
                     if (reason != null)
                     {
-                        pass.RevertAll();
+                        pass.RevertAll($"the pass was undone: {reason}");
                         Log.Warn($"detail: undone, {reason}");
                     }
                     else
@@ -193,6 +213,20 @@ namespace Viswright
                         Log.Check($"detail: {detailed} brush(es) made func_detail; after: {after.Describe()}");
                     }
                 }
+
+                static string BrushKey(VmfBrush b) => "detail:" + ReviewLog.Anchor(b.Mins) + ":" + ReviewLog.Anchor(b.Maxs);
+                foreach (var (brush, why) in excluded)
+                    review.Add(new ReviewItem(BrushKey(brush), "detail", ItemStatus.Rejected, why, brush.Mins, brush.Maxs));
+                foreach (var (_, brush, why) in pass.Returned)
+                    if (!review.Items.Any(i => i.Id == BrushKey(brush)))
+                        review.Add(new ReviewItem(BrushKey(brush), "detail", ItemStatus.Rejected, why, brush.Mins, brush.Maxs));
+                foreach (var solid in pass.Moved)
+                {
+                    var brush = pass.BrushOf(solid);
+                    review.Add(new ReviewItem(BrushKey(brush), "detail", ItemStatus.Applied, "made func_detail; nothing around it sees more", brush.Mins, brush.Maxs)
+                        { NodeIds = [solid.Id ?? 0] });
+                }
+                Lap("detail");
             }
 
             if (options.Nodraw)
@@ -208,6 +242,11 @@ namespace Viswright
                         : BspSpace.CollisionDifferences(BspSpace.Load(compile.Bsp).CollisionShapes(CollisionMask), collision) is > 0 and var n ? $"collision changed ({n} brushes)"
                         : BspVisibilityData.Load(compile.Bsp).Faces.Count > current.Faces ? "the map has more faces, not fewer"
                         : null;
+                    var box = new SourceKit.Geometry.Vec3(4, 4, 4);
+                    foreach (var (side, centre) in pass.Changed.Zip(pass.Centres))
+                        review.Add(new ReviewItem("nodraw:" + ReviewLog.Anchor(centre), "nodraw", reason == null ? ItemStatus.Applied : ItemStatus.Rejected,
+                            reason == null ? "pressed against opaque brushes on all of its area" : $"the pass was undone: {reason}", centre - box, centre + box)
+                            { Detail = side.Before });
                     if (reason != null)
                     {
                         pass.RevertAll();
@@ -225,21 +264,45 @@ namespace Viswright
                 }
                 else
                     Log.Check("nodraw: no face is fully hidden");
+                Lap("nodraw");
             }
 
             if (options.Fades)
-                RunFades(options, working, reference, content, guard, Path.Combine(work, "fades.txt"));
+            {
+                RunFades(options, working, reference, content, guard, Path.Combine(work, "fades.txt"), review);
+                Lap("fades");
+            }
             if (options.Slim)
-                RunSlimming(options, working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard);
+            {
+                RunSlimming(options, working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard, review);
+                Lap("slim");
+            }
             // Last: it is measured against the map with every other change made.
             if (options.Hints)
-                RunHints(options, working, copy, Path.Combine(work, "hints"), name, tools, collision, samples, guard);
+            {
+                RunHints(options, working, copy, Path.Combine(work, "hints"), name, tools, collision, samples, guard, review);
+                Lap("hints");
+            }
+
+            if (options.Review)
+            {
+                // What the map sees with every change kept, for the heatmap and its difference.
+                var final = Compile(working, copy, Path.Combine(work, "review"), name, tools);
+                if (final == null)
+                    Log.Warn("review: the optimised map did not compile cleanly, so the review has no after picture");
+                string page = ReviewOutput.Write(Path.Combine(Path.GetDirectoryName(copy)!, "review"), name, working, review, samples, baseline, final);
+                Log.Out($"review: {review.Items.Count} item(s); open {page}");
+                Lap("review");
+            }
+
+            foreach (var (step, total, compiling, runs) in timings)
+                Log.Info($"time: {step} {total.TotalSeconds:0}s, of which {compiling.TotalSeconds:0}s in {runs} compiler run(s)");
 
             return (detailed, nodrawn, portals);
         }
 
         private static void RunFades(OptimizeOptions options, VmfDocument working, WorkCompile reference, GameContent content,
-            ChangeGuard guard, string listFile)
+            ChangeGuard guard, string listFile, ReviewLog review)
         {
             // The 3D skybox is the area the sky_camera stands in.
             var space = BspSpace.Load(reference.Bsp);
@@ -251,6 +314,17 @@ namespace Viswright
             var pass = new PropFadePass(options.FadePixels, (space.Maxs - space.Mins).Length);
             int count = pass.Apply(working, content, p => skyArea >= 0 && space.AreaAt(p) == skyArea);
             pass.Declare(guard);
+            foreach (var (prop, _, _) in pass.Changed)
+            {
+                var (lo, hi) = ReviewLog.Bounds(prop);
+                review.Add(new ReviewItem("fade:" + ReviewLog.Anchor((lo + hi) / 2), "fades", ItemStatus.Applied,
+                    $"fades out by {prop.Get("fademaxdist")} units", lo, hi) { Detail = prop.Get("model"), NodeIds = [prop.Id ?? 0] });
+            }
+            foreach (var (prop, why) in pass.SkippedProps)
+            {
+                var (lo, hi) = ReviewLog.Bounds(prop);
+                review.Add(new ReviewItem("fade:" + ReviewLog.Anchor((lo + hi) / 2), "fades", ItemStatus.Rejected, why, lo, hi) { Detail = prop.Get("model") });
+            }
             Log.Check($"fades: {count} static prop(s) given a fade, where they shrink to {options.FadePixels:0.#} pixels at 1080p and 90 degrees");
             foreach (var (reason, n) in pass.Skipped.OrderByDescending(kv => kv.Value))
                 Log.Info($"  {n} left alone: {reason}");
@@ -264,8 +338,25 @@ namespace Viswright
         }
 
         private static void RunSlimming(OptimizeOptions options, VmfDocument working, string copy, string folder, string name,
-            Toolchain tools, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard)
+            Toolchain tools, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard, ReviewLog review)
         {
+            void Report(SlimmingPass pass, string? undone)
+            {
+                foreach (var (entity, why) in pass.SkippedEntities)
+                {
+                    var (lo, hi) = ReviewLog.Bounds(entity);
+                    review.Add(new ReviewItem("slim:" + ReviewLog.Anchor((lo + hi) / 2), "slim", ItemStatus.Rejected, why, lo, hi)
+                        { Detail = $"{entity.Classname} {entity.Get("model")}".Trim() });
+                }
+                foreach (var (entity, before) in pass.Converted)
+                {
+                    var (lo, hi) = ReviewLog.Bounds(entity);
+                    review.Add(new ReviewItem("slim:" + ReviewLog.Anchor((lo + hi) / 2), "slim", undone == null ? ItemStatus.Applied : ItemStatus.Rejected,
+                        undone ?? $"{before} made {entity.Classname}: one entity fewer", lo, hi)
+                        { Detail = entity.Get("model"), NodeIds = undone == null ? [entity.Id ?? 0] : [] });
+                }
+            }
+
             var lua = LuaGuard.Scan(LuaGuard.GameFolders(tools.GameFolder).Concat(options.LuaPaths));
             Log.Info($"slim: {lua.FilesScanned:N0} Lua file(s) scanned; {lua.Classes.Count} class(es) looked up by class name");
 
@@ -279,6 +370,7 @@ namespace Viswright
                 Log.Info($"  {pass.LightingChanges} func_brush left alone: as func_detail it would cast a lightmap shadow it does not cast now");
             if (count == 0)
             {
+                Report(pass, null);
                 Log.Check("slim: no entity can be made static");
                 return;
             }
@@ -288,6 +380,7 @@ namespace Viswright
             var before = WorkCompile.Prepare(working, copy, folder + "-before", name);
             if (!before.RunVbsp(tools).Succeeded || before.Leaked)
             {
+                Report(pass, null);
                 Log.Warn("slim: skipped, the map does not compile cleanly before it");
                 return;
             }
@@ -318,6 +411,7 @@ namespace Viswright
                     ? $"collision changed ({n} brushes)" : null;
             if (reason != null)
             {
+                Report(pass, $"the pass was undone: {reason}");
                 pass.RevertAll();
                 Log.Warn($"slim: undone, {reason}");
                 return;
@@ -331,6 +425,7 @@ namespace Viswright
             var countsAfter = EntityCounts(compile.Bsp);
             if (countsBefore.Entities - countsAfter.Entities != pass.Converted.Count || countsAfter.StaticProps - countsBefore.StaticProps != props)
             {
+                Report(pass, "the pass was undone: the entity and static prop counts did not add up");
                 pass.RevertAll();
                 Log.Warn($"slim: undone, the counts do not add up: entities {countsBefore.Entities} -> {countsAfter.Entities}, " +
                     $"static props {countsBefore.StaticProps} -> {countsAfter.StaticProps}, for {props} prop(s) and {brushes} brush(es) converted");
@@ -338,6 +433,7 @@ namespace Viswright
             }
 
             pass.Declare(guard);
+            Report(pass, null);
             Log.Check($"slim: {props} prop_dynamic made prop_static, {brushes} func_brush made func_detail: {pass.Converted.Count} fewer entities" +
                 (back > 0 ? $" ({back} put back: VBSP would not take their model as static)" : ""));
         }
@@ -353,19 +449,30 @@ namespace Viswright
         /// nearby, or where the points around them see the same or less, stay detail.
         /// </summary>
         private static WorkCompile? KeepDetailWhereNoMoreIsSeen(DetailPass pass, WorkCompile compile, WorkCompile reference, SamplePoints samples,
-            VmfDocument working, string copy, string folder, string name, Toolchain tools)
+            VmfDocument working, string copy, string folder, string name, Toolchain tools, ReviewLog review)
         {
             var before = CompileMeasure.PerPoint(reference, samples);
             for (int round = 1; round <= 3 && pass.Moved.Count > 0; round++)
             {
                 var after = CompileMeasure.PerPoint(compile, samples);
-                var changes = new List<(SourceKit.Geometry.Vec3 Point, double Change)>();
-                for (int i = 0; i < before.Length; i++)
-                    if (before[i] >= 0 && after[i] >= 0 && after[i] != before[i])
-                        changes.Add((samples.Points[i], after[i] - before[i]));
+                // Per brush: the change in what the points around it see, and what they saw before.
+                var around = new Dictionary<VmfBrush, (double Change, double Before)>();
+                foreach (var solid in pass.Moved)
+                {
+                    var brush = pass.BrushOf(solid);
+                    double change = 0, was = 0;
+                    for (int i = 0; i < before.Length; i++)
+                    {
+                        if (before[i] < 0 || after[i] < 0 || DetailPass.DistanceToBox(samples.Points[i], brush.Mins, brush.Maxs) > DetailReach)
+                            continue;
+                        change += after[i] - before[i];
+                        was += before[i];
+                    }
+                    around[brush] = (change, was);
+                }
 
-                int back = pass.RevertWhere(brush =>
-                    changes.Where(r => DetailPass.DistanceToBox(r.Point, brush.Mins, brush.Maxs) <= DetailReach).Sum(r => r.Change) > 0);
+                int back = pass.RevertWhere(brush => around[brush].Change > 0,
+                    brush => $"the points within {DetailReach:0} units see {around[brush].Change / Math.Max(1, around[brush].Before):P1} more with it as detail");
                 if (back == 0)
                     break;
                 Log.Info($"detail: round {round}: {back} brush(es) stay world, the points around them see more as detail");
@@ -376,7 +483,7 @@ namespace Viswright
                 compile = WorkCompile.Prepare(working, copy, folder, name);
                 if (!compile.RunVbsp(tools).Succeeded || compile.Leaked || !compile.RunVvis(tools).Succeeded)
                 {
-                    pass.RevertAll();
+                    pass.RevertAll("the pass was undone: the map stopped compiling cleanly once brushes were put back");
                     Log.Warn("detail: undone, the map stopped compiling cleanly once brushes were put back");
                     return null;
                 }
@@ -399,7 +506,7 @@ namespace Viswright
         /// more portals to work through.
         /// </summary>
         private static void RunHints(OptimizeOptions options, VmfDocument working, string copy, string folder, string name, Toolchain tools,
-            List<BspSpace.BrushShape> collision, SamplePoints samples, ChangeGuard guard)
+            List<BspSpace.BrushShape> collision, SamplePoints samples, ChangeGuard guard, ReviewLog review)
         {
             string vvis = Path.GetFileName(tools.Vvis);
             if (!vvis.Contains("++", StringComparison.Ordinal) && !vvis.Contains("plusplus", StringComparison.OrdinalIgnoreCase))
@@ -425,6 +532,31 @@ namespace Viswright
 
             var pass = new HintPass(working);
             var best = new Dictionary<HintSquare, (double Height, double Gain)>();
+            var tried = new Dictionary<HintSquare, (double Height, double Gain)>();
+            var lostTogether = new HashSet<HintSquare>();
+            void Report(string? undone)
+            {
+                foreach (var square in squares)
+                {
+                    var lo = new SourceKit.Geometry.Vec3(square.Mins.X, square.Mins.Y, square.Floor);
+                    string id = $"hint:{square.X}_{square.Y}";
+                    if (!tried.TryGetValue(square, out var t))
+                        continue;
+                    if (undone == null && pass.Placed.TryGetValue(square, out var placed))
+                    {
+                        var g = best[square];
+                        review.Add(new ReviewItem(id, "hints", ItemStatus.Applied, $"a hint at z {placed.Height:0}: the points here see {g.Gain:P1} less", lo,
+                            new SourceKit.Geometry.Vec3(square.Maxs.X, square.Maxs.Y, placed.Height)) { Gain = g.Gain, NodeIds = [placed.Solid.Id ?? 0] });
+                        continue;
+                    }
+                    var (height, gain) = best.TryGetValue(square, out var b) ? b : t;
+                    string why = undone != null && best.ContainsKey(square) ? $"the set was undone: {undone}"
+                        : lostTogether.Contains(square) ? $"saw {gain:P1} less alone, but stopped helping alongside the other hints"
+                        : $"its points saw at most {gain:P1} less with a hint (needs {HintGain:P0})";
+                    review.Add(new ReviewItem(id, "hints", ItemStatus.Rejected, why, lo,
+                        new SourceKit.Geometry.Vec3(square.Maxs.X, square.Maxs.Y, height)) { Gain = gain });
+                }
+            }
             TimeSpan slowest = reference.VbspRun!.Elapsed + reference.VvisRun!.Elapsed;
             for (int round = 0; ; round++)
             {
@@ -453,6 +585,8 @@ namespace Viswright
                 foreach (var (square, height) in tries)
                 {
                     double gain = Gain(square, referenceCost, cost);
+                    if (!tried.TryGetValue(square, out var t) || gain > t.Gain)
+                        tried[square] = (height, gain);
                     if (gain >= HintGain && gain > best.GetValueOrDefault(square).Gain)
                     {
                         best[square] = (height, gain);
@@ -464,6 +598,7 @@ namespace Viswright
 
             if (best.Count == 0)
             {
+                Report(null);
                 Log.Check("hints: none kept, no square saw less with a hint");
                 return;
             }
@@ -482,7 +617,10 @@ namespace Viswright
                 if (lost.Count == 0)
                     break;
                 foreach (var square in lost)
+                {
                     pass.Remove(square);
+                    lostTogether.Add(square);
+                }
                 Log.Info($"hints: {lost.Count} square(s) stopped helping alongside the others and lost their hint");
                 final = null;
             }
@@ -500,12 +638,14 @@ namespace Viswright
                     : null;
             if (reason != null)
             {
+                Report(reason);
                 pass.RevertAll();
                 Log.Warn($"hints: undone, {reason}");
                 return;
             }
 
             pass.Declare(guard);
+            Report(null);
             string list = Path.Combine(folder, "hints.txt");
             File.WriteAllLines(list, pass.Placed.OrderBy(kv => kv.Key.X).ThenBy(kv => kv.Key.Y)
                 .Select(kv => $"{kv.Key.Mins.X:0} {kv.Key.Mins.Y:0} to {kv.Key.Maxs.X:0} {kv.Key.Maxs.Y:0} at z {kv.Value.Height:0}: {best[kv.Key].Gain:P1} less seen there"));
@@ -571,6 +711,38 @@ namespace Viswright
         /// </summary>
         private static int RunAreaportals(VmfDocument working, string copy, string folder, string name, Toolchain tools,
             WorkCompile baseline, SamplePoints samples, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard,
+            ReviewLog review, out WorkCompile? final)
+        {
+            var pass = new AreaportalPass(working);
+            int added = RunAreaportals(pass, working, copy, folder, name, tools, baseline, samples, collision, content, guard, out final);
+
+            static string DoorKey(VmfNode door) => door.Get("targetname") is { Length: > 0 } n && !n.StartsWith(AreaportalPass.DoorNamePrefix, StringComparison.Ordinal)
+                ? n : "door@" + ReviewLog.Anchor(ReviewLog.Bounds(door).Mins);
+            foreach (var (door, reason) in pass.SkippedDoors)
+            {
+                var (lo, hi) = ReviewLog.Bounds(door);
+                review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, reason, lo, hi)
+                    { Detail = door.Classname });
+            }
+            foreach (var (doorway, door, reason) in pass.Dropped)
+                review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, reason, doorway.Mins, doorway.Maxs)
+                    { Detail = door.Classname });
+            foreach (var (portal, doorway, door, named) in pass.Added)
+            {
+                string closes = doorway.Closes ? $"closes with {door.Get("targetname")}"
+                    : $"never closes: {pass.OpenOnlyDoors.GetValueOrDefault(door, "the door does not fill the opening")}";
+                review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Applied,
+                    named ? $"{closes} (door given that name)" : closes, doorway.Mins, doorway.Maxs)
+                {
+                    Detail = portal.Get("targetname"),
+                    NodeIds = named ? [portal.Id ?? 0, door.Id ?? 0] : [portal.Id ?? 0],
+                });
+            }
+            return added;
+        }
+
+        private static int RunAreaportals(AreaportalPass pass, VmfDocument working, string copy, string folder, string name, Toolchain tools,
+            WorkCompile baseline, SamplePoints samples, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard,
             out WorkCompile? final)
         {
             final = null;
@@ -582,7 +754,6 @@ namespace Viswright
                 return 0;
             }
 
-            var pass = new AreaportalPass(working);
             var space = BspSpace.Load(baseline.Bsp);
             var doorways = pass.FindDoorways(space, content);
             int framed = doorways.Count;
@@ -605,7 +776,7 @@ namespace Viswright
                 var run = compile.RunVbsp(tools);
                 if (!run.Succeeded && !compile.Leaked)
                 {
-                    pass.RevertAll();
+                    pass.RevertAll("VBSP failed with the portals in, so the pass was undone");
                     Log.Warn($"areaportals: undone, VBSP failed: {LastLines(run)}");
                     return 0;
                 }
@@ -616,11 +787,12 @@ namespace Viswright
                     var near = pass.Added.Where(a => leak.Points.Any(p => Distance(p, a.Doorway) < 64)).Select(a => a.Portal).ToHashSet();
                     if (near.Count == 0)
                     {
-                        pass.RevertAll();
+                        pass.RevertAll("the map leaked somewhere no new portal is near, so the pass was undone");
                         Log.Warn("areaportals: undone, the map leaked somewhere no new portal is near");
                         return 0;
                     }
-                    pass.KeepOnly(pass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet());
+                    pass.KeepOnly(pass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet(),
+                        "a leak ran through its doorway: the portal did not seal it");
                     Log.Info($"areaportals: round {round} leaked; {near.Count} portal(s) on the leak path removed");
                     continue;
                 }
@@ -629,14 +801,15 @@ namespace Viswright
                 var invalid = AreaportalSelection.Invalid(pass, vis);
                 if (invalid.Count == 0)
                     break;
-                pass.KeepOnly(pass.Added.Select(a => a.Portal).Except(invalid).ToHashSet());
+                pass.KeepOnly(pass.Added.Select(a => a.Portal).Except(invalid).ToHashSet(),
+                    "VBSP did not put it between two areas: an open window or gap joins them");
                 Log.Info($"areaportals: round {round}: {invalid.Count} portal(s) do not divide two areas (an open window or gap joins them) and are removed");
                 vis = null;
             }
 
             if (compile == null || vis == null || pass.Added.Count == 0)
             {
-                pass.RevertAll();
+                pass.RevertAll("no portal could be placed, so the pass was undone");
                 Log.Warn("areaportals: none could be placed");
                 return 0;
             }
@@ -644,7 +817,7 @@ namespace Viswright
             var ranked = AreaportalSelection.Rank(pass, vis, BspSpace.Load(compile.Bsp), samples);
             var keep = AreaportalSelection.Choose(pass, ranked, slots);
             int dropped = pass.Added.Count - keep.Count;
-            pass.KeepOnly(keep);
+            pass.KeepOnly(keep, $"left out to stay within Garry's Mod's {Audit.PortalBudget} areaportals: it hides less than the ones kept");
             if (dropped > 0)
                 Log.Info($"areaportals: {dropped} portal(s) worth least left out to stay within the budget");
 
@@ -655,7 +828,8 @@ namespace Viswright
             int unsealed = pass.Added.Count(a => !stillSealed.Contains(a.Doorway));
             if (unsealed > 0)
             {
-                pass.KeepOnly(pass.Added.Where(a => stillSealed.Contains(a.Doorway)).Select(a => a.Portal).ToHashSet());
+                pass.KeepOnly(pass.Added.Where(a => stillSealed.Contains(a.Doorway)).Select(a => a.Portal).ToHashSet(),
+                    "no longer divides two areas once the portals left out reopened their doorways");
                 Log.Info($"areaportals: {unsealed} more no longer divide two areas once the others are left out");
             }
 
@@ -670,17 +844,18 @@ namespace Viswright
                     var near = pass.Added.Where(a => leak.Points.Any(p => Distance(p, a.Doorway) < 64)).Select(a => a.Portal).ToHashSet();
                     if (near.Count == 0)
                     {
-                        pass.RevertAll();
+                        pass.RevertAll("the chosen set leaked somewhere no new portal is near, so the pass was undone");
                         Log.Warn("areaportals: undone, the chosen set leaks somewhere no new portal is near");
                         return 0;
                     }
-                    pass.KeepOnly(pass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet());
+                    pass.KeepOnly(pass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet(),
+                        "a leak ran through its doorway: the portal did not seal it");
                     Log.Info($"areaportals: the chosen set leaked; {near.Count} portal(s) on the leak path removed");
                     continue;
                 }
                 if (!run.Succeeded)
                 {
-                    pass.RevertAll();
+                    pass.RevertAll("VBSP failed with the portals in, so the pass was undone");
                     Log.Warn($"areaportals: undone, VBSP failed: {LastLines(run)}");
                     return 0;
                 }
@@ -688,7 +863,8 @@ namespace Viswright
                 var invalid = AreaportalSelection.Invalid(pass, vis);
                 if (invalid.Count == 0)
                     break;
-                pass.KeepOnly(pass.Added.Select(a => a.Portal).Except(invalid).ToHashSet());
+                pass.KeepOnly(pass.Added.Select(a => a.Portal).Except(invalid).ToHashSet(),
+                    "VBSP did not put it between two areas: an open window or gap joins them");
             }
             if (pass.Added.Count == 0)
             {
@@ -699,7 +875,7 @@ namespace Viswright
             int differences = BspSpace.CollisionDifferences(BspSpace.Load(compile!.Bsp).CollisionShapes(CollisionMask), collision);
             if (differences > 0 || vis!.HighestPortalNumber > Audit.PortalBudget)
             {
-                pass.RevertAll();
+                pass.RevertAll(differences > 0 ? "collision changed, so the pass was undone" : "a portal number went past what Garry's Mod loads, so the pass was undone");
                 Log.Warn(differences > 0
                     ? $"areaportals: undone, collision changed ({differences} brushes)"
                     : $"areaportals: undone, a portal would be numbered {vis.HighestPortalNumber}, past what Garry's Mod loads");
@@ -787,7 +963,7 @@ namespace Viswright
                 {
                     if (run.Succeeded)
                         return compile;
-                    pass.RevertAll();
+                    pass.RevertAll("the pass was undone: VBSP failed");
                     Log.Warn($"detail: undone, VBSP failed: {LastLines(run)}");
                     return null;
                 }
@@ -802,7 +978,7 @@ namespace Viswright
                 }
                 if (reverted == 0)
                 {
-                    pass.RevertAll();
+                    pass.RevertAll("the pass was undone: the map leaked somewhere no candidate is near");
                     Log.Warn("detail: undone, the map leaked somewhere no candidate brush is near");
                     return null;
                 }
@@ -811,7 +987,7 @@ namespace Viswright
 
             if (pass.Moved.Count > 0)
             {
-                pass.RevertAll();
+                pass.RevertAll($"the pass was undone: still leaking after {LeakRepairRounds} rounds");
                 Log.Warn($"detail: undone, still leaking after {LeakRepairRounds} rounds");
             }
             return null;

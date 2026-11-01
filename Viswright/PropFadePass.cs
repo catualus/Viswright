@@ -48,6 +48,9 @@ namespace Viswright
         /// <summary>Per model: how many props got a fade, and at what distance.</summary>
         public SortedDictionary<string, (int Count, double Max)> Models { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Each prop passed over, and why, for the review.</summary>
+        public List<(VmfNode Prop, string Reason)> SkippedProps { get; } = [];
+
         /// <summary>
         /// The fade distance for a prop of <paramref name="radius"/>: where its diameter projects to
         /// <see cref="Pixels"/> pixels, rounded to the nearest 64 units.
@@ -63,20 +66,20 @@ namespace Viswright
                     continue;
                 string? path = prop.Get("model");
                 var model = path == null ? null : content.Model(path);
-                if (model == null) { Skip("the model was not found"); continue; }
-                if ((model.Flags & NoForcedFade) != 0) { Skip("the model is marked never to fade"); continue; }
-                if (!Vec3.TryParse(prop.Get("origin") ?? "", out var origin)) { Skip("no origin"); continue; }
-                if (inSkybox(origin)) { Skip("in the 3D skybox"); continue; }
+                if (model == null) { Skip("the model was not found", prop); continue; }
+                if ((model.Flags & NoForcedFade) != 0) { Skip("the model is marked never to fade", prop); continue; }
+                if (!Vec3.TryParse(prop.Get("origin") ?? "", out var origin)) { Skip("no origin", prop); continue; }
+                if (inSkybox(origin)) { Skip("in the 3D skybox", prop); continue; }
 
                 double scale = double.TryParse(prop.Get("modelscale") ?? prop.Get("uniformscale"), NumberStyles.Float, CultureInfo.InvariantCulture, out double s) && s > 0 ? s : 1;
                 var size = new Vec3(model.HullMax.X - model.HullMin.X, model.HullMax.Y - model.HullMin.Y, model.HullMax.Z - model.HullMin.Z) * scale;
                 double radius = size.Length / 2;
-                if (radius * 2 > LandmarkDiameter) { Skip("too big to fade (a landmark)"); continue; }
-                if (radius <= 0) { Skip("the model has no size"); continue; }
+                if (radius * 2 > LandmarkDiameter) { Skip("too big to fade (a landmark)", prop); continue; }
+                if (radius <= 0) { Skip("the model has no size", prop); continue; }
 
                 double max = Math.Max(256, FadeDistance(radius));
                 // A fade further away than anything in the map can be seen from changes nothing.
-                if (max >= LongestView) { Skip("it would never fade within the map at this many pixels"); continue; }
+                if (max >= LongestView) { Skip("it would never fade within the map at this many pixels", prop); continue; }
                 double min = Math.Round(max * 0.85);
                 changed.Add((prop, prop.Get("fademindist"), prop.Get("fademaxdist")));
                 prop.Set("fademaxdist", max.ToString(CultureInfo.InvariantCulture));
@@ -87,7 +90,11 @@ namespace Viswright
             return changed.Count;
         }
 
-        private void Skip(string reason) => Skipped[reason] = Skipped.GetValueOrDefault(reason) + 1;
+        private void Skip(string reason, VmfNode prop)
+        {
+            Skipped[reason] = Skipped.GetValueOrDefault(reason) + 1;
+            SkippedProps.Add((prop, reason));
+        }
 
         public void RevertAll()
         {

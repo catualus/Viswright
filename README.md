@@ -153,6 +153,23 @@ The optimised prominence was compiled in full and loaded in Garry's Mod. From op
 nodraw faces, 18,048 rays were traced at it; every one hit the brush covering it first. The other faces had no
 open space in front of them at all.
 
+## Reviewing what it did
+
+With **Write a review** (`-review`), a run writes a `review` folder beside the copy:
+
+- `<map>_review.vmf`, the optimised map for Hammer++. A **Viswright** visgroup holds every item:
+  - **Applied**, by pass: the real changes;
+  - **Markers**: boxes for applied changes that are not objects of their own, such as a nodraw face or a fade on a prop;
+  - **Rejected**: a named box per refused candidate, with the reason in its comments;
+  - **Heatmap**: flat cells coloured by how much is visible from where players stand, before, after and the change, seen in the 2D views and flat-shaded 3D.
+
+  Markers and heatmap start hidden, and VBSP leaves hidden objects out, so the file still compiles to the optimised map. The camera list has one camera per top item, taken from each pass in turn, for the Camera tool to step through.
+- Plans of each floor, drawn from the BSP: walls, detail, indoor and outdoor floor, each item outlined (applied solid, refused faint), and what is visible from each standing place before and after, and the change.
+- A picture of each top item, `items.json`, and `review.html`, which puts them together with the reason for every item and a `setpos` to go and look in game.
+
+`viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z]` draws the plans of any compiled map, or with
+`-from`, what that spot's PVS lets it see.
+
 ## How it runs
 
 1. Compile Pal runs `viswright optimize` before VBSP (order 0.8, after VMFFIX).
@@ -197,12 +214,13 @@ compile that would go over.
 ```
 viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N] [-areaportals]
                    [-detail] [-nodraw] [-fades [-fadepixels N]] [-slim [-luapath <folder>]...]
-                   [-hints [-hinttime M]] [-blocksize N] -vbsp <exe> -vvis <exe> -game <folder>
+                   [-hints [-hinttime M]] [-blocksize N] [-review] -vbsp <exe> -vvis <exe> -game <folder>
 viswright audit <map.vmf>
 viswright report <map.bsp>
 viswright diff <a.vmf> <b.vmf>
 viswright collision <a.bsp> <b.bsp>
 viswright model <models/x.mdl> -game <folder>
+viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z] [-out <folder>]
 viswright status <map.vmf>
 ```
 

@@ -16,7 +16,7 @@ namespace Viswright.Tests
         /// A 1024-unit courtyard open to the sky, with the player start, and beside it a sealed room
         /// holding only a light, which no player can reach.
         /// </summary>
-        private static string Courtyard()
+        internal static string Courtyard()
         {
             var world = new StringBuilder();
             world.Append(AreaportalTests.Box(0, 0, 0, 1024, 1024, 16));

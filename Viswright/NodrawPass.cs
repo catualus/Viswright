@@ -45,7 +45,7 @@ namespace Viswright
                 || opacity.IsOpaque(f.Material))).ToList();
 
             // Faces of covering brushes, keyed by their plane flipped, so a face finds what lies against it.
-            var byPlane = new Dictionary<PlaneKey, List<(VmfBrush Owner, bool Detail, Winding Winding)>>();
+            var byPlane = new Dictionary<PlaneKey, List<(VmfBrush Owner, bool Detail, Winding Winding, Vec3 Mins, Vec3 Maxs)>>();
             foreach (var (_, brush, detail) in coverers)
                 foreach (var face in brush.Faces)
                     if (face.Winding != null)
@@ -53,7 +53,8 @@ namespace Viswright
                         var key = PlaneKey.Of(face.Plane.Flipped);
                         if (!byPlane.TryGetValue(key, out var list))
                             byPlane[key] = list = [];
-                        list.Add((brush, detail, face.Winding));
+                        var (lo, hi) = Bounds(face.Winding);
+                        list.Add((brush, detail, face.Winding, lo, hi));
                     }
 
             foreach (var (_, brush, isDetail) in brushes)
@@ -67,7 +68,10 @@ namespace Viswright
                     if (!byPlane.TryGetValue(PlaneKey.Of(face.Plane), out var against))
                         continue;
 
-                    var others = against.Where(c => !ReferenceEquals(c.Owner, brush)).ToList();
+                    // Only faces whose bounds reach this one can cover any of it: on a floor plane shared by
+                    // thousands of brushes, clipping against every one is what made this pass slow.
+                    var (faceLo, faceHi) = Bounds(face.Winding);
+                    var others = against.Where(c => !ReferenceEquals(c.Owner, brush) && Overlap(c.Mins, c.Maxs, faceLo, faceHi)).ToList();
                     var covers = others.Select(c => c.Winding).ToList();
                     if (covers.Count == 0 || !IsCovered(face.Winding, face.Plane.Normal, covers))
                         continue;
@@ -157,6 +161,13 @@ namespace Viswright
             }
             return planes;
         }
+
+        private static (Vec3 Mins, Vec3 Maxs) Bounds(Winding w) =>
+            (w.Points.Aggregate(Vec3.Min), w.Points.Aggregate(Vec3.Max));
+
+        private static bool Overlap(Vec3 aLo, Vec3 aHi, Vec3 bLo, Vec3 bHi, double slack = 0.5) =>
+            aLo.X <= bHi.X + slack && aHi.X >= bLo.X - slack && aLo.Y <= bHi.Y + slack && aHi.Y >= bLo.Y - slack
+            && aLo.Z <= bHi.Z + slack && aHi.Z >= bLo.Z - slack;
 
         /// <summary>World brushes and func_detail brushes: the ones that never move or switch off.</summary>
         private static IEnumerable<(VmfNode Solid, VmfBrush Brush, bool Detail)> StaticBrushes(VmfDocument map)

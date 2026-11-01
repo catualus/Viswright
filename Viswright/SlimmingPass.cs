@@ -51,6 +51,9 @@ namespace Viswright
         /// <summary>Each class Lua protected, with the lookup and a file that does it.</summary>
         public List<(string Class, string Lookup, string File)> Protected { get; } = [];
 
+        /// <summary>Each entity passed over, and why, for the review.</summary>
+        public List<(VmfNode Entity, string Reason)> SkippedEntities { get; } = [];
+
         public int Apply(VmfDocument map, GameContent content, LuaGuard lua)
         {
             bool Guarded(string cls)
@@ -72,11 +75,11 @@ namespace Viswright
                     if (!Plain(e, PropDefaults)) continue;
                     string? path = e.Get("model");
                     var model = path == null ? null : content.Model(path);
-                    if (model == null) { Skip("the model was not found"); continue; }
+                    if (model == null) { Skip("the model was not found", e); continue; }
                     // VBSP deletes a static prop whose model was not compiled with $staticprop, or whose
                     // prop_data makes it a physics prop without allowing static use.
-                    if (!model.StaticProp) { Skip("the model is not compiled for static use"); continue; }
-                    if (!model.UsableAsStaticProp) { Skip("the model is a physics prop (prop_data without allowstatic)"); continue; }
+                    if (!model.StaticProp) { Skip("the model is not compiled for static use", e); continue; }
+                    if (!model.UsableAsStaticProp) { Skip("the model is a physics prop (prop_data without allowstatic)", e); continue; }
                     converted.Add((e, cls));
                     e.Set("classname", "prop_static");
                     // A prop_dynamic casts no shadow into the lightmaps; a prop_static does unless told not
@@ -87,11 +90,16 @@ namespace Viswright
                 else if (!brushesProtected && string.Equals(cls, "func_brush", StringComparison.OrdinalIgnoreCase))
                 {
                     // Solidity 1 is never solid; as func_detail it would block players.
-                    if (e.Get("Solidity")?.Trim() == "1") { Skip("the func_brush is never solid"); continue; }
+                    if (e.Get("Solidity")?.Trim() == "1") { Skip("the func_brush is never solid", e); continue; }
                     if (!Plain(e, BrushDefaults)) continue;
                     if (e.Children("solid").SelectMany(s => s.Children("side")).Any(s => s.Child("dispinfo") != null)) continue;
                     // func_brush casts no lightmap shadow unless told to; func_detail always does.
-                    if (e.Get("vrad_brush_cast_shadows") != "1") { LightingChanges++; continue; }
+                    if (e.Get("vrad_brush_cast_shadows") != "1")
+                    {
+                        LightingChanges++;
+                        SkippedEntities.Add((e, "as func_detail it would cast a lightmap shadow it does not cast now"));
+                        continue;
+                    }
                     converted.Add((e, cls));
                     e.Set("classname", "func_detail");
                 }
@@ -109,7 +117,7 @@ namespace Viswright
                 string value = (e.Get(key) ?? "").Trim();
                 if (!allowed.Contains(value, StringComparer.OrdinalIgnoreCase))
                 {
-                    Skip($"{key} is set");
+                    Skip($"{key} is set", e);
                     return false;
                 }
             }
@@ -117,6 +125,12 @@ namespace Viswright
         }
 
         private void Skip(string reason, int count = 1) => Skipped[reason] = Skipped.GetValueOrDefault(reason) + count;
+
+        private void Skip(string reason, VmfNode entity)
+        {
+            Skip(reason);
+            SkippedEntities.Add((entity, reason));
+        }
 
         /// <summary>Puts back the entities whose model VBSP refused as a static prop.</summary>
         public int RevertModels(IReadOnlySet<string> refused)
@@ -127,6 +141,7 @@ namespace Viswright
             {
                 Restore(entity, before);
                 converted.Remove((entity, before));
+                SkippedEntities.Add((entity, "VBSP would not take its model as a static prop"));
             }
             return back.Count;
         }
