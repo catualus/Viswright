@@ -205,6 +205,44 @@ Against the hint search's results, the half of the squares with the most slack h
 the wrong way. Hints that helped did so by giving VVIS better portals, not by separating places that see
 different things.
 
+## What Valve's own maps teach
+
+Valve released the sources of ten TF2 maps in 2009. Each was compiled with vbsp++ and vvis++ as Valve left
+it, then with one kind of placement taken out, and measured the same way as Viswright measures (triangles
+visible from where players can stand). Two sources were saved with their hints and portals hidden in
+Hammer, which VBSP leaves out; they were brought back out of hiding first. The sources are not part of
+this repository.
+
+| Map | Hint faces | Without hints | Without visclusters | VVIS with / without hints |
+| --- | --- | --- | --- | --- |
+| cp_badlands | 542 | +37.0% | -0.3%, VVIS 14 s -> 22 s | 14.2 s / 3.6 s |
+| pl_badwater | 192 | +26.0% | -15.3% | 18.5 s / 12.1 s |
+| cp_gravelpit | 124 | +23.7% | no change | 7.5 s / 3.1 s |
+| tc_hydro | 74 | +21.4% | no change | 6.9 s / 4.9 s |
+| ctf_2fort | 202 | +19.5% | -3.8% | 10.9 s / 4.9 s |
+| cp_granary | 585 | +16.1% | no change | 8.7 s / 4.0 s |
+| cp_dustbowl | 137 | +11.1% | no change | 17.4 s / 7.0 s |
+| arena_ravine | 83 | +10.5% | no change | 2.4 s / 0.7 s |
+| arena_lumberyard | 305 | +8.0% | -31.9%, VVIS 10 s -> 27 s | 10.1 s / 2.3 s |
+| pl_goldrush | 90 | +1.1% | -17.0% | 12.1 s / 9.2 s |
+
+- **Hints pay on Valve's maps** - a median of about 17% less visible - at two to four times the VVIS time.
+  Two thirds of Valve's hint faces are vertical and axis-aligned (median 200 units across), a third
+  horizontal (median 350). Drawn on the maps, they make three shapes: a cap at roof height across open
+  ground (2Fort's courtyard, all of Badlands, Gravelpit's pit), vertical walls cutting open terrain into
+  cells, and boxes wrapping rooms, buildings and bridges. Across 621 squares of ground, the squares Valve
+  hinted are picked out by slack through portals (AUC 0.64), not by slack within clusters (0.39) or by
+  how much the PVS lets through (0.50) - the same as on the downtown maps.
+- **Visclusters trade visibility for compile time** on open maps: Lumberyard sees 32% more with them, for a
+  VVIS three times faster.
+- **Detail buys compile time**: made structural, 2Fort's detail would see 8% less, with VVIS 18 times slower
+  (198 s); Lumberyard's would take VVIS 854 s.
+- **Areaportals** in these maps are opened and closed by logic and doors' outputs rather than by being
+  named as a door's areaportal, so what shutting them hides is not measured here.
+
+The downtown maps differ from these where it matters: their streets are walled in up to the sky, so a
+cap over open ground has nothing to cut off, which is why the hint search finds so little there.
+
 ## Deciding, then compiling the same way every time
 
 A map's first compile with any pass ticked is a **review**: everything is searched and measured, the
