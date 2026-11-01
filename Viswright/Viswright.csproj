@@ -12,6 +12,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- ComputeSharp's shader generator writes unsafe code. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -22,6 +24,8 @@
 
   <ItemGroup>
     <ProjectReference Include="$(SourceKitRoot)SourceKit\SourceKit.csproj" />
+    <!-- Direct3D 12 compute, for casting rays on the GPU; shaders are compiled with the build. -->
+    <PackageReference Include="ComputeSharp" Version="3.2.0" />
     <Using Include="SourceKit" />
     <InternalsVisibleTo Include="Viswright.Tests" />
   </ItemGroup>

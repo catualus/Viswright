@@ -79,7 +79,12 @@
   {
     "Name": "Write a review",
     "Parameter": " -review",
-    "Description": "Write a review of everything Viswright did and considered beside the optimised copy: a VMF to open in Hammer++ with every change, refusal and a visibility heatmap in a Viswright visgroup and a camera on each top item, plans of every floor showing what is visible before and after, a picture of each top item, and a page listing them all with the reason for each. Adds one VBSP and VVIS compile and the time to draw the plans."
+    "Description": "Write a review of everything Viswright did and considered beside the optimised copy: a VMF to open in Hammer++ with every change, refusal and a visibility heatmap in a Viswright visgroup and a camera on each top item, plans of every floor showing what is visible before and after, a picture of each top item, and a page listing them all with the reason for each, and PVS slack: how much of what each place's PVS lets through cannot be seen from there, found by casting rays on the GPU. Adds one VBSP and VVIS compile and the time to draw the plans."
+  },
+  {
+    "Name": "Cast rays on the CPU",
+    "Parameter": " -cpu",
+    "Description": "Measure the review's PVS slack on the CPU even when there is a GPU. The GPU is about ten times faster and casts four times as many rays; the CPU is used anyway when no GPU with Direct3D 12 is found."
   },
   {
     "Name": "Report only",

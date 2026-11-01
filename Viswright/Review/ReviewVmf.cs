@@ -26,7 +26,7 @@ namespace Viswright.Review
         private static readonly Rgb Applied = new(40, 170, 90), Rejected = new(220, 60, 60), Suggested = new(240, 170, 30);
 
         public static VmfDocument Build(VmfDocument working, IReadOnlyList<(int Number, ReviewItem Item)> items, SamplePoints samples,
-            double[]? before, double[]? after)
+            double[]? before, double[]? after, double[]? slack = null)
         {
             var doc = VmfDocument.Parse(working.ToString(), working.HasByteOrderMark);
             long id = doc.MaxId();
@@ -115,7 +115,7 @@ namespace Viswright.Review
                 hidden.Add(marker);
             }
 
-            AddHeatmap(doc, heatRoot, Group, samples, before, after, ref id);
+            AddHeatmap(doc, heatRoot, Group, samples, before, after, slack, ref id);
 
             if (hidden.Count > 0)
             {
@@ -150,12 +150,12 @@ namespace Viswright.Review
         /// in it see: before the passes, after them, and the change. Cells are hidden world brushes.
         /// </summary>
         private static void AddHeatmap(VmfDocument doc, VmfNode heatRoot, Func<VmfNode, string, Rgb, VmfNode> group,
-            SamplePoints samples, double[]? before, double[]? after, ref long id)
+            SamplePoints samples, double[]? before, double[]? after, double[]? slack, ref long id)
         {
             if (before == null)
                 return;
             const double Cell = 256;
-            var cells = new Dictionary<(int, int, int), (double Before, double After, int N, double Floor)>();
+            var cells = new Dictionary<(int, int, int), (double Before, double After, int N, double Floor, double Slack, int SlackN)>();
             for (int i = 0; i < samples.Points.Count; i++)
             {
                 if (before[i] < 0 || (after != null && after[i] < 0))
@@ -163,14 +163,16 @@ namespace Viswright.Review
                 var p = samples.Points[i];
                 var key = ((int)Math.Floor(p.X / Cell), (int)Math.Floor(p.Y / Cell), (int)Math.Floor((p.Z - SamplePoints.EyeHeight) / 128));
                 var c = cells.GetValueOrDefault(key);
+                bool hasSlack = slack != null && slack[i] >= 0;
                 cells[key] = (c.Before + before[i], c.After + (after?[i] ?? 0), c.N + 1,
-                    c.N == 0 ? p.Z - SamplePoints.EyeHeight : Math.Min(c.Floor, p.Z - SamplePoints.EyeHeight));
+                    c.N == 0 ? p.Z - SamplePoints.EyeHeight : Math.Min(c.Floor, p.Z - SamplePoints.EyeHeight),
+                    c.Slack + (hasSlack ? slack![i] : 0), c.SlackN + (hasSlack ? 1 : 0));
             }
             if (cells.Count == 0)
                 return;
 
             double top = Percentile(cells.Values.Select(c => c.Before / c.N), 0.95);
-            var layers = new List<(string Name, Func<(double Before, double After, int N, double Floor), Rgb> Colour)>
+            var layers = new List<(string Name, Func<(double Before, double After, int N, double Floor, double Slack, int SlackN), Rgb> Colour)>
             {
                 ("visible before", c => Rgb.Heat(c.Before / c.N / Math.Max(1, top))),
             };
@@ -179,6 +181,8 @@ namespace Viswright.Review
                 layers.Add(("visible after", c => Rgb.Heat(c.After / c.N / Math.Max(1, top))));
                 layers.Add(("change", c => Rgb.Change((c.After - c.Before) / Math.Max(1, c.Before) * 5)));
             }
+            if (slack != null)
+                layers.Add(("PVS slack", c => c.SlackN == 0 ? new Rgb(128, 128, 128) : Rgb.Heat(c.Slack / c.SlackN)));
 
             var world = doc.World;
             var hiddenWorld = new VmfNode("hidden");

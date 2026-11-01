@@ -143,6 +143,27 @@ namespace Viswright.Tests
                 .Invoke([points.ToList()]);
 
         [Fact]
+        public void AnOpenCourtyardHasLittleSlack()
+        {
+            if (AreaportalTests.Tools() is not { } tools)
+                return;
+            using var space = new Workspace();
+            string vmf = space.Write("maps/courtyard.vmf", HintTests.Courtyard());
+            var map = VmfDocument.Load(vmf);
+            var compile = WorkCompile.Prepare(map, vmf, Path.Combine(space.Root, "c"), "courtyard");
+            Assert.True(compile.RunVbsp(tools).Succeeded);
+            Assert.True(compile.RunVvis(tools).Succeeded);
+            var bsp = BspSpace.Load(compile.Bsp);
+            var samples = SamplePoints.Find(bsp, SamplePoints.Reachable(map, SourceKit.Compile.PortalFile.Load(compile.Prt), bsp));
+
+            var slack = Slack.Measure(compile.Bsp, samples, CompileMeasure.PerPoint(compile, samples), gpu: false, rays: 2048);
+
+            // One open room: from anywhere in it, everything its PVS lets through is in sight.
+            Assert.All(samples.Points.Select((_, i) => slack.Seen[i]), seen => Assert.True(seen > 0));
+            Assert.True(slack.Average < 0.2, $"slack {slack.Average:P1}");
+        }
+
+        [Fact]
         public void APlanShowsWallsAroundOpenGround()
         {
             if (AreaportalTests.Tools() is not { } tools)

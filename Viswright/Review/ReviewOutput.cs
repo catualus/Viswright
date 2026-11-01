@@ -23,7 +23,7 @@ namespace Viswright.Review
 
         /// <summary>Writes everything and returns the page's path.</summary>
         public static string Write(string folder, string name, VmfDocument working, ReviewLog log, SamplePoints samples,
-            WorkCompile baseline, WorkCompile? final)
+            WorkCompile baseline, WorkCompile? final, Slack? slackBefore = null, Slack? slackAfter = null)
         {
             if (Directory.Exists(folder))
                 Directory.Delete(folder, recursive: true);
@@ -35,15 +35,16 @@ namespace Viswright.Review
 
             WriteJson(Path.Combine(folder, "items.json"), numbered, samples);
             string vmf = Path.Combine(folder, name + "_review.vmf");
-            ReviewVmf.Build(working, numbered, samples, before, after).Save(vmf);
+            var slack = slackAfter ?? slackBefore;
+            ReviewVmf.Build(working, numbered, samples, before, after, slack?.Values).Save(vmf);
 
             var space = BspSpace.Load((final ?? baseline).Bsp);
             var vis = BspVisibilityData.Load((final ?? baseline).Bsp);
-            var plans = WritePlans(folder, space, samples, numbered, before, after);
+            var plans = WritePlans(folder, space, samples, numbered, before, after, slack);
             var thumbs = WriteThumbnails(folder, space, samples, numbered, before, after);
 
             string page = Path.Combine(folder, "review.html");
-            File.WriteAllText(page, Page(name, vmf, numbered, plans, thumbs, after != null, before, after, samples));
+            File.WriteAllText(page, Page(name, vmf, numbered, plans, thumbs, after != null, before, after, samples, slackBefore, slackAfter));
             return page;
         }
 
@@ -82,10 +83,10 @@ namespace Viswright.Review
             json.WriteEndObject();
         }
 
-        private sealed record Plan(double Z, string Items, string Before, string? After, string? Change);
+        private sealed record Plan(double Z, string Items, string Before, string? After, string? Change, string? Slack);
 
         private static List<Plan> WritePlans(string folder, BspSpace space, SamplePoints samples, List<(int Number, ReviewItem Item)> items,
-            double[] before, double[]? after)
+            double[] before, double[]? after, Slack? slack)
         {
             var plans = new List<Plan>();
             double top = Math.Max(1, Percentile(before.Where(v => v >= 0), 0.95));
@@ -117,7 +118,8 @@ namespace Viswright.Review
                     PlanRenderer.Heat(c, open, view, samples, change, v => Rgb.Change((v - 1) * 5), alpha: 0.75);
                     PlanRenderer.Items(c, view, highlights.Where(h => h.Item.Status == ItemStatus.Applied));
                 });
-                plans.Add(new Plan(z, itemsFile, beforeFile, afterFile, changeFile));
+                string? slackFile = slack == null ? null : Save("slack", c => PlanRenderer.Heat(c, open, view, samples, slack.Values, Rgb.Heat, alpha: 0.7));
+                plans.Add(new Plan(z, itemsFile, beforeFile, afterFile, changeFile, slackFile));
             }
             return plans;
         }
@@ -158,7 +160,7 @@ namespace Viswright.Review
         private static string H(string? s) => WebUtility.HtmlEncode(s ?? "");
 
         private static string Page(string name, string vmf, List<(int Number, ReviewItem Item)> items, List<Plan> plans,
-            Dictionary<int, string> thumbs, bool hasAfter, double[] before, double[]? after, SamplePoints samples)
+            Dictionary<int, string> thumbs, bool hasAfter, double[] before, double[]? after, SamplePoints samples, Slack? slackBefore, Slack? slackAfter)
         {
             var html = new StringBuilder();
             html.Append($$"""
@@ -211,6 +213,17 @@ namespace Viswright.Review
                         $"<b>{pairs.Average(p => p.First):N0}</b> before, <b>{pairs.Average(p => p.Second):N0}</b> after.</p>");
             }
 
+            foreach (var (label, s) in new[] { ("before", slackBefore), ("after", slackAfter) })
+            {
+                if (s == null) continue;
+                var ok = Enumerable.Range(0, s.Values.Length).Where(i => s.Values[i] >= 0).ToList();
+                if (ok.Count == 0) continue;
+                html.Append($"<p><b>PVS slack {label}</b> ({H(s.How)}): a standing point really sees <b>{ok.Average(i => s.Seen[i]):N0}</b> triangles " +
+                    $"of the <b>{ok.Average(i => s.Pvs[i]):N0}</b> its PVS lets through, {s.Average:P0} slack. " +
+                    $"{ok.Average(i => s.SplitSlack[i]):P0} is seen from elsewhere in the same cluster, which cutting clusters up could save; " +
+                    $"{ok.Average(i => s.FlowSlack[i]):P0} is seen from nowhere in the cluster, VVIS being cautious through the portals.</p>");
+            }
+
             // Plans.
             html.Append("""
                 <h2>Plans</h2>
@@ -226,6 +239,7 @@ namespace Viswright.Review
                 Figure(html, plan.Before, "Visible from each standing place, before");
                 if (plan.After != null) Figure(html, plan.After, "Visible from each standing place, after");
                 if (plan.Change != null) Figure(html, plan.Change, "Change, with the items outlined");
+                if (plan.Slack != null) Figure(html, plan.Slack, "PVS slack: the share of what the PVS lets through that cannot be seen from here");
                 html.Append("</div>");
             }
 

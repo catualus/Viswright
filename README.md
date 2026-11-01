@@ -172,8 +172,25 @@ With **Write a review** (`-review`), a run writes a `review` folder beside the c
 - Plans of each floor, drawn from the BSP: walls, detail, indoor and outdoor floor, each item outlined (applied solid, refused faint), and what is visible from each standing place before and after, and the change.
 - A picture of each top item, `items.json`, and `review.html`, which puts them together with the reason for every item and a `setpos` to go and look in game.
 
-`viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z]` draws the plans of any compiled map, or with
-`-from`, what that spot's PVS lets it see.
+`viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z] [-slack]` draws the plans of any compiled map,
+or with `-from`, what that spot's PVS lets it see.
+
+**PVS slack.** The review also measures how much of what each place's PVS lets through cannot actually be
+seen from there. From every standing point, rays are cast in 65,536 directions against the world's
+triangles (displacements included; glass and tool faces let them through) and the faces they meet first
+are counted. This runs on the GPU through Direct3D 12 - about 230 million rays a second on an RTX 3070 Ti
+laptop, ten times the CPU - and on the CPU (16,384 rays a point) when there is no GPU or with `-cpu`.
+Slack is split in two: what other points in the same cluster see (what cutting clusters up could save)
+and what no point in the cluster sees (VVIS being cautious through portals, which no split inside the
+cluster removes). It is a measurement only, shown as a plan per floor and a heatmap layer; no change is
+decided by it.
+
+On the downtown maps a standing point really sees about 1,180 of the 6,940 triangles its PVS lets through
+(80% slack): 24% within clusters, 56% through portals. Open plazas are near 0%, streets and rooms 80-90%.
+Against the hint search's results, the half of the squares with the most slack held 17 of meowy's 21 and
+10 of prominence's 14 squares that a hint helped - a weak guide, and the slack within clusters pointed
+the wrong way. Hints that helped did so by giving VVIS better portals, not by separating places that see
+different things.
 
 ## How it runs
 

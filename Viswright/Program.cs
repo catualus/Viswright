@@ -65,7 +65,7 @@ namespace Viswright
         private static int Optimize(string[] args)
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-review", "-vbsp", "-vvis", "-game" };
+                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-review", "-cpu", "-vbsp", "-vvis", "-game" };
             RefuseUnknownFlags(args, known);
 
             string input = Positional(args, 1) ?? throw new ArgumentException("optimize needs the VMF to read.");
@@ -100,6 +100,7 @@ namespace Viswright
                 LuaPaths = AllFlagValues(args, "-luapath"),
                 Hints = HasFlag(args, "-hints"),
                 Review = HasFlag(args, "-review"),
+                Cpu = HasFlag(args, "-cpu"),
                 HintMinutes = TryGetFlagValue(args, "-hinttime", out string? minutes)
                     ? (double.TryParse(minutes, NumberStyles.Float, CultureInfo.InvariantCulture, out double m) && m > 0 && m <= 240 ? m
                         : throw new ArgumentException($"-hinttime needs a number of minutes from 1 to 240, not '{minutes}'."))
@@ -155,7 +156,7 @@ namespace Viswright
         /// </summary>
         private static int RenderCommand(string[] args)
         {
-            RefuseUnknownFlags(args, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "-threads", "-vmf", "-out", "-from" });
+            RefuseUnknownFlags(args, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "-threads", "-vmf", "-out", "-from", "-slack", "-cpu" });
             string bsp = Positional(args, 1) ?? throw new ArgumentException("render needs the BSP to draw.");
             if (!File.Exists(bsp))
                 throw new FileNotFoundException($"The BSP {bsp} does not exist.", bsp);
@@ -188,11 +189,23 @@ namespace Viswright
                 return 0;
             }
 
+            Slack? slack = null;
+            if (HasFlag(args, "-slack"))
+            {
+                slack = Slack.Measure(bsp, samples, CompileMeasure.PerPoint(WorkCompile.Existing(Path.ChangeExtension(bsp, "vmf")), samples), gpu: !HasFlag(args, "-cpu"));
+                var ok = Enumerable.Range(0, slack.Values.Length).Where(i => slack.Values[i] >= 0).ToList();
+                Log.Check(string.Create(CultureInfo.InvariantCulture,
+                    $"slack: a standing point really sees {ok.Average(i => slack.Seen[i]):N0} of the {ok.Average(i => slack.Pvs[i]):N0} triangles its PVS lets through; " +
+                    $"{slack.Average:P1} slack, {ok.Average(i => slack.SplitSlack[i]):P1} within clusters, {ok.Average(i => slack.FlowSlack[i]):P1} through portals ({slack.How})"));
+            }
+
             int level = 0;
             foreach (double z in Review.PlanRenderer.Levels(samples))
             {
                 var view = Review.PlanView.Around(samples.Points.Where(p => Math.Abs(p.Z - z) <= 96), z, 512, 1600);
-                var canvas = Review.PlanRenderer.Base(space, view, out _);
+                var canvas = Review.PlanRenderer.Base(space, view, out var open);
+                if (slack != null)
+                    Review.PlanRenderer.Heat(canvas, open, view, samples, slack.Values, Review.Rgb.Heat, alpha: 0.7);
                 string file = Path.Combine(output, $"level{++level}.png");
                 canvas.SavePng(file);
                 Log.Out(string.Create(CultureInfo.InvariantCulture, $"{file}: eye height {z:0}, {view.Scale:0} units a pixel"));
@@ -342,7 +355,8 @@ namespace Viswright
                       -hints tries hints over open ground at a few heights and keeps each only
                       where it lowers what is visible, searching for at most M minutes (15).
                       -blocksize is the block size the real VBSP compile uses. -review writes a
-                      review beside the copy: a Hammer VMF of every item, plans and a page.
+                      review beside the copy: a Hammer VMF of every item, plans and a page,
+                      with PVS slack measured by casting rays on the GPU (-cpu: on the CPU).
                       -detail makes small and complex world brushes func_detail; -nodraw makes
                       faces hidden against opaque brushes nodraw. Both are checked by compiling
                       with the compilers named, and undone if the map leaks, its collision
@@ -351,9 +365,10 @@ namespace Viswright
                   viswright audit <map.vmf>
                       Report what could be optimised, changing nothing.
 
-                  viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z] [-out <folder>]
+                  viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z] [-slack [-cpu]] [-out <folder>]
                       Draw a plan of each floor of a compiled map, or with -from, what that spot's
-                      PVS lets it see.
+                      PVS lets it see. -slack colours each place by how much of what its PVS lets
+                      through cannot be seen from there, casting rays on the GPU (-cpu: on the CPU).
 
                   viswright report <map.bsp>
                       Measure a compiled map's visibility: clusters and triangles each cluster

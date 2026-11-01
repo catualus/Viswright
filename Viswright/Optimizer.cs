@@ -50,6 +50,9 @@ namespace Viswright
         /// <summary>Write the review: a Hammer VMF of every item, pictures of the map, and a page listing them.</summary>
         public bool Review { get; init; }
 
+        /// <summary>Cast the review's rays on the CPU even when there is a GPU.</summary>
+        public bool Cpu { get; init; }
+
         /// <summary>The compilers every pass is checked with. Needed when any pass is on.</summary>
         public Toolchain? Tools { get; init; }
     }
@@ -305,7 +308,13 @@ namespace Viswright
             {
                 // What the map sees with every change kept: the passes after the last visibility compile
                 // (nodraw, fades, entities) change no leaf and no PVS, so that compile shows it.
-                string page = ReviewOutput.Write(Path.Combine(Path.GetDirectoryName(copy)!, "review"), name, working, review, samples, baseline, lastVis);
+                // How much more each place's PVS lets through than can be seen from there, before and after.
+                var slackBefore = Slack.Measure(baseline.Bsp, samples, CompileMeasure.PerPoint(baseline, samples), gpu: !options.Cpu);
+                var slackAfter = ReferenceEquals(lastVis, baseline) ? null : Slack.Measure(lastVis.Bsp, samples, CompileMeasure.PerPoint(lastVis, samples), gpu: !options.Cpu);
+                Log.Info($"slack: a standing point really sees {slackBefore.Seen.Where(v => v >= 0).Average():N0} triangles; " +
+                    $"PVS slack {slackBefore.Average:P1} before" + (slackAfter != null ? $", {slackAfter.Average:P1} after" : "") + $" ({slackBefore.How})");
+                string page = ReviewOutput.Write(Path.Combine(Path.GetDirectoryName(copy)!, "review"), name, working, review, samples, baseline, lastVis,
+                    slackBefore, slackAfter);
                 Log.Out($"review: {review.Items.Count} item(s); open {page}");
                 Lap("review");
             }
