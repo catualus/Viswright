@@ -29,14 +29,6 @@ namespace Viswright
         /// <param name="read">Reads a file by its game path, such as "materials/brick/wall01.vmt", or returns null.</param>
         public MaterialOpacity(Func<string, byte[]?> read) => this.read = read;
 
-        public static MaterialOpacity ForGame(string gameFolder)
-        {
-            // GameFiles infers the install from a BSP's folder; a BSP that does not exist in the game's
-            // maps folder gives it the game's own search paths and no pakfile.
-            var files = GameFiles.Open(Path.Combine(gameFolder, "maps", "__viswright__.bsp"));
-            return new MaterialOpacity(path => files.TryRead(path, out var bytes) ? bytes : null);
-        }
-
         /// <summary>Whether a brush face with <paramref name="material"/> (as a VMF names it) is opaque.</summary>
         public bool IsOpaque(string material)
         {

@@ -63,7 +63,7 @@ namespace Viswright
         private static int Optimize(string[] args)
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-vbsp", "-vvis", "-game" };
+                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-vbsp", "-vvis", "-game" };
             RefuseUnknownFlags(args, known);
 
             string input = Positional(args, 1) ?? throw new ArgumentException("optimize needs the VMF to read.");
@@ -81,6 +81,7 @@ namespace Viswright
                 DryRun = HasFlag(args, "-dryrun"),
                 Detail = HasFlag(args, "-detail"),
                 Nodraw = HasFlag(args, "-nodraw"),
+                Areaportals = HasFlag(args, "-areaportals"),
                 Tools = tools,
             });
 
@@ -239,10 +240,12 @@ namespace Viswright
                 viswright - automatic visibility optimisation for Source maps
 
                   viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N]
-                                     [-detail] [-nodraw] -vbsp <exe> -vvis <exe> -game <folder>
+                                     [-areaportals] [-detail] [-nodraw] -vbsp <exe> -vvis <exe> -game <folder>
                       Optimise a copy of the map and hand it to the rest of the compile. The map
                       itself is never written. -source names the map as queued when <map.vmf> is an
                       earlier step's copy; -dryrun reports without handing anything on.
+                      -areaportals puts an areaportal in the doorway of each door that has none,
+                      within Garry's Mod's limit of 191, keeping those that hide the most.
                       -detail makes small and complex world brushes func_detail; -nodraw makes
                       faces hidden against opaque brushes nodraw. Both are checked by compiling
                       with the compilers named, and undone if the map leaks, its collision

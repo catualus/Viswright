@@ -1,5 +1,11 @@
 [
   {
+    "Name": "Areaportals in doorways",
+    "Parameter": " -areaportals",
+    "Description": "Put an areaportal in the doorway of each door that has none, closing with the door, so a shut door hides everything behind it and the server stops sending what is there. Only openings framed by world brushes on all four sides are used, and only where the portal really divides two areas - a window or gap round the side rules a door out. Unnamed doors given a portal are named vw_door_<id>. Stays within the 191 areaportals Garry's Mod loads, counting the map's own, and keeps the ones that hide the most.",
+    "Warning": "Adds names to doors that had none. Lua that finds doors by having no name would see them differently."
+  },
+  {
     "Name": "Make detail",
     "Parameter": " -detail",
     "Description": "Turn small and complex world brushes - trim, railings, pillars, stairs, frames - into func_detail, so they stop cutting the map into extra pieces for VVIS. Brushes that form the outside of the map, frame an areaportal, are water or are in a visgroup named viswright_ignore are never touched. Any brush a leak runs through goes back to being world, and the whole pass is undone if collision changes or more becomes visible."

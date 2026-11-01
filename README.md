@@ -5,7 +5,8 @@ mappers do by hand - func_detail, nodraw on hidden faces, areaportals in doorway
 fade distances - on a copy of the map, proves each change with the real compilers, and backs out
 anything that does not pay for itself.
 
-**Status: phase 2.** Two passes, both opt-in while in beta: **Make detail** and **Hide covered faces**.
+**Status: phase 3.** Three passes, all opt-in while in beta: **Areaportals in doorways**, **Make detail**
+and **Hide covered faces**.
 Every compile audits the map, runs the ticked passes, checks the copy differs only in what they are
 allowed to change, and hands it to VBSP; a second step measures the compiled map's visibility after
 VVIS.
@@ -16,9 +17,22 @@ Each pass is checked by compiling the map with the VBSP and VVIS the game is set
 folder beside the copy. The map as it is gets compiled first - once, and again only when the map,
 the compilers or Viswright change - and every pass is measured against it.
 
+**Areaportals in doorways** (`-areaportals`) puts a func_areaportal in the doorway of each door that has
+none, closing with the door. The opening is found by walking out from the door through the first
+compile's world brushes - left, right, up, down - and only a clean rectangle framed by world brushes on
+all four sides is used; the portal sits inside the wall's thickness, a unit into the frame all round.
+Before compiling, VBSP's own area flood is repeated over the first compile's portal file: a doorway whose
+two sides are joined some other way (an open window, a gap, a door with no portal) would not divide two
+areas and is dropped. The portal closes with the door when the door, together with any opaque brushes
+framing it, fills the opening and the door's materials are opaque; otherwise it stays open. Unnamed
+doors are named `vw_door_<id>`, unique across the map. Garry's Mod loads at most 191 areaportals, the
+map's own included, so the portals are ranked by what shutting their door hides from where players
+stand, and the best that fit are kept; that set is compiled again to prove it.
+
 **Make detail** (`-detail`) turns small and complex world brushes into func_detail: trim, railings,
 pillars, stairs, frames. Left out: brushes that face the void (checked against the first compile),
-frame an areaportal, are water, are a unit or two thin, or are in a visgroup named `viswright_ignore`.
+frame an areaportal, look into two different areas (they keep an areaportal's sides apart), are water,
+are a unit or two thin, or are in a visgroup named `viswright_ignore`.
 The map is then compiled; if it leaks, every brush the leak path runs through goes back to being world
 and it is compiled again. The pass is undone if the leaks will not stop, if any collision brush is lost,
 added, moved or changes contents, or if more becomes visible from where a player stands.
@@ -45,6 +59,26 @@ Measured on 2026-11-01 with vbsp++ and vvis++ (default VBSP options):
 | Faces made nodraw | 246 | 89 |
 | Collision | identical | identical |
 | Time the passes add | about 3.5 minutes | about 3.5 minutes |
+
+With all three passes (2026-11-01):
+
+| | rp_downtown_prominence_d | rp_downtown_meowy |
+| --- | --- | --- |
+| Areaportals added | 69, all closing with their door | 76, 70 closing |
+| Areaportal numbers used | 191 of 191 | 187 of 191 |
+| Brushes made func_detail | 452 | 310 |
+| Faces made nodraw | 246 | 89 |
+| VVIS portals | 16,310 -> 15,691 | 14,942 -> 15,019 |
+| VVIS | 62.8 s -> 44.8 s | 49.4 s -> 53.0 s |
+| Triangles visible from a standing position | 6,023 -> 6,016; 5,956 with the new doors shut | 6,701 -> 6,693; 6,626 with them shut |
+| Time the passes add | about 6.5 minutes | about 6.5 minutes |
+
+The world triangles a shut door saves are few, because VVIS already hides most interiors from the street.
+What a closed areaportal also does - stop drawing the props and entities behind it, and stop the server
+sending them - is not in that figure.
+
+In Garry's Mod, the optimised prominence loads with all 191 portal numbers in use. At a storefront door
+given a portal, wireframe rendering shows nothing behind the shut door and the whole plaza once it opens.
 
 The optimised prominence was compiled in full and loaded in Garry's Mod. From open space around each of the 246
 nodraw faces, 18,048 rays were traced at it; every one hit the brush covering it first. The other faces had no

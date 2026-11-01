@@ -26,12 +26,15 @@ namespace Viswright
         /// <summary>Pass B: make faces hidden against opaque brushes nodraw.</summary>
         public bool Nodraw { get; init; }
 
+        /// <summary>Pass C: put an areaportal in the doorway of each door that has none.</summary>
+        public bool Areaportals { get; init; }
+
         /// <summary>The compilers every pass is checked with. Needed when any pass is on.</summary>
         public Toolchain? Tools { get; init; }
     }
 
     /// <summary>What a run did.</summary>
-    public sealed record OptimizeResult(string? CopyPath, IReadOnlyList<VmfChange> Changes, int Detailed = 0, int Nodrawn = 0);
+    public sealed record OptimizeResult(string? CopyPath, IReadOnlyList<VmfChange> Changes, int Detailed = 0, int Nodrawn = 0, int Portals = 0);
 
     /// <summary>
     /// The optimiser: read the map, run the enabled passes on it, prove each with the real compilers,
@@ -46,7 +49,7 @@ namespace Viswright
         /// <summary>How much a pass may raise the triangles visible from a standing position and still be kept.</summary>
         public const double CostTolerance = 1.01;
 
-        private const int LeakRepairRounds = 12;
+        private const int LeakRepairRounds = 16;
 
         public static OptimizeResult Run(OptimizeOptions options)
         {
@@ -72,9 +75,9 @@ namespace Viswright
             if (relocated > 0)
                 Log.Info($"{relocated} instance path(s) re-pointed so the copy finds the same files");
 
-            int detailed = 0, nodrawn = 0;
-            if (options.Detail || options.Nodraw)
-                (detailed, nodrawn) = RunPasses(options, working, copy, guard);
+            int detailed = 0, nodrawn = 0, portals = 0;
+            if (options.Detail || options.Nodraw || options.Areaportals)
+                (detailed, nodrawn, portals) = RunPasses(options, working, copy, guard);
 
             var changes = VmfDiff.Compare(original, working);
             var undeclared = guard.Undeclared(changes);
@@ -88,16 +91,22 @@ namespace Viswright
             if (options.DryRun)
             {
                 Log.Out("dry run: this compile uses the map as it is");
-                return new OptimizeResult(null, changes, detailed, nodrawn);
+                return new OptimizeResult(null, changes, detailed, nodrawn, portals);
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
             working.Save(copy);
             Log.Out(copy);
-            return new OptimizeResult(copy, changes, detailed, nodrawn);
+            return new OptimizeResult(copy, changes, detailed, nodrawn, portals);
         }
 
-        private static (int Detailed, int Nodrawn) RunPasses(OptimizeOptions options, VmfDocument working, string copy, ChangeGuard guard)
+        /// <summary>
+        /// Collision is compared without areaportal brushes: they are not solid, and pass C adds them on
+        /// purpose.
+        /// </summary>
+        private const int CollisionMask = ~0x8000;
+
+        private static (int Detailed, int Nodrawn, int Portals) RunPasses(OptimizeOptions options, VmfDocument working, string copy, ChangeGuard guard)
         {
             var tools = options.Tools ?? throw new ArgumentException("The passes need -vbsp, -vvis and -game to check their changes.");
             tools.Validate();
@@ -107,20 +116,35 @@ namespace Viswright
 
             var baseline = Baseline(working, copy, Path.Combine(work, "baseline"), name, tools);
             if (baseline == null)
-                return (0, 0);
+                return (0, 0, 0);
 
             var samples = SamplePoints.Find(BspSpace.Load(baseline.Bsp));
             var before = CompileMeasure.Of(baseline, samples);
-            var collision = BspSpace.Load(baseline.Bsp).CollisionShapes(-1);
+            var collision = BspSpace.Load(baseline.Bsp).CollisionShapes(CollisionMask);
             Log.Check($"before: {before.Describe()}");
 
-            int detailed = 0, nodrawn = 0;
+            int detailed = 0, nodrawn = 0, portals = 0;
             CompileMeasure current = before;
+            var content = GameContent.Open(tools.GameFolder);
+
+            // Before detail, so the detail pass sees the new portals and leaves their frames as world.
+            // Each pass is judged against the map as the passes before it left it.
+            WorkCompile reference = baseline;
+            if (options.Areaportals)
+            {
+                portals = RunAreaportals(working, copy, Path.Combine(work, "areaportals"), name, tools, baseline, samples, collision, content, guard,
+                    out var portalCompile);
+                if (portalCompile is { VvisRun.Succeeded: true })
+                {
+                    reference = portalCompile;
+                    current = CompileMeasure.Of(portalCompile, samples);
+                }
+            }
 
             if (options.Detail)
             {
                 var pass = new DetailPass(working);
-                var candidates = DetailPass.Candidates(working, BspSpace.Load(baseline.Bsp));
+                var candidates = DetailPass.Candidates(working, BspSpace.Load(reference.Bsp));
                 pass.Apply(candidates);
                 Log.Info($"detail: {candidates.Count} world brush(es) are candidates");
 
@@ -129,7 +153,7 @@ namespace Viswright
                 {
                     compile.RunVvis(tools);
                     var after = CompileMeasure.Of(compile, samples);
-                    string? reason = Rejection(compile, collision, before, after);
+                    string? reason = Rejection(compile, collision, current, after);
                     if (reason != null)
                     {
                         pass.RevertAll();
@@ -148,14 +172,14 @@ namespace Viswright
             if (options.Nodraw)
             {
                 var pass = new NodrawPass();
-                int found = pass.Apply(working, MaterialOpacity.ForGame(tools.GameFolder));
+                int found = pass.Apply(working, content.Opacity);
                 if (found > 0)
                 {
                     var compile = WorkCompile.Prepare(working, copy, Path.Combine(work, "nodraw"), name);
                     var run = compile.RunVbsp(tools);
                     string? reason = compile.Leaked ? "the map leaked"
                         : !run.Succeeded ? $"VBSP failed: {LastLines(run)}"
-                        : BspSpace.CollisionDifferences(BspSpace.Load(compile.Bsp).CollisionShapes(-1), collision) is > 0 and var n ? $"collision changed ({n} brushes)"
+                        : BspSpace.CollisionDifferences(BspSpace.Load(compile.Bsp).CollisionShapes(CollisionMask), collision) is > 0 and var n ? $"collision changed ({n} brushes)"
                         : BspVisibilityData.Load(compile.Bsp).Faces.Count > current.Faces ? "the map has more faces, not fewer"
                         : null;
                     if (reason != null)
@@ -177,7 +201,182 @@ namespace Viswright
                     Log.Check("nodraw: no face is fully hidden");
             }
 
-            return (detailed, nodrawn);
+            return (detailed, nodrawn, portals);
+        }
+
+        /// <summary>
+        /// Pass C: finds the doorways, compiles with a portal in every one, keeps those VBSP placed
+        /// between two areas, then keeps the most valuable within the areaportal budget and compiles
+        /// again to prove the set it keeps.
+        /// </summary>
+        private static int RunAreaportals(VmfDocument working, string copy, string folder, string name, Toolchain tools,
+            WorkCompile baseline, SamplePoints samples, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard,
+            out WorkCompile? final)
+        {
+            final = null;
+            int existing = working.Entities.Count(e => Audit.PortalClasses.Contains(e.Classname ?? "", StringComparer.OrdinalIgnoreCase));
+            int slots = Audit.PortalBudget - existing;
+            if (slots <= 0)
+            {
+                Log.Warn($"areaportals: the map already has {existing}, Garry's Mod's limit; none added");
+                return 0;
+            }
+
+            var pass = new AreaportalPass(working);
+            var space = BspSpace.Load(baseline.Bsp);
+            var doorways = pass.FindDoorways(space, content);
+            int framed = doorways.Count;
+            doorways = pass.SealedDoorways(doorways, SourceKit.Compile.PortalFile.Load(baseline.Prt), space);
+            Log.Info($"areaportals: {framed} framed doorway(s), {doorways.Count} of them dividing two areas, {doorways.Count(d => d.Closes)} with a door that can close them; {slots} slot(s) free");
+            foreach (var (reason, count) in pass.Skipped.OrderByDescending(kv => kv.Value))
+                Log.Info($"  {count} door(s) skipped: {reason}");
+            foreach (var (reason, count) in pass.OpenOnly.OrderByDescending(kv => kv.Value))
+                Log.Info($"  {count} doorway(s) get a portal that never closes: {reason}");
+            if (doorways.Count == 0)
+                return 0;
+
+            pass.Apply(doorways);
+
+            WorkCompile? compile = null;
+            BspVisibilityData? vis = null;
+            for (int round = 1; round <= 6 && pass.Added.Count > 0; round++)
+            {
+                compile = WorkCompile.Prepare(working, copy, folder, name);
+                var run = compile.RunVbsp(tools);
+                if (!run.Succeeded && !compile.Leaked)
+                {
+                    pass.RevertAll();
+                    Log.Warn($"areaportals: undone, VBSP failed: {LastLines(run)}");
+                    return 0;
+                }
+                if (compile.Leaked)
+                {
+                    // An areaportal that does not seal its two areas makes VBSP write a pointfile.
+                    var leak = compile.LeakPath!;
+                    var near = pass.Added.Where(a => leak.Points.Any(p => Distance(p, a.Doorway) < 64)).Select(a => a.Portal).ToHashSet();
+                    if (near.Count == 0)
+                    {
+                        pass.RevertAll();
+                        Log.Warn("areaportals: undone, the map leaked somewhere no new portal is near");
+                        return 0;
+                    }
+                    pass.KeepOnly(pass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet());
+                    Log.Info($"areaportals: round {round} leaked; {near.Count} portal(s) on the leak path removed");
+                    continue;
+                }
+
+                vis = BspVisibilityData.Load(compile.Bsp);
+                var invalid = AreaportalSelection.Invalid(pass, vis);
+                if (invalid.Count == 0)
+                    break;
+                pass.KeepOnly(pass.Added.Select(a => a.Portal).Except(invalid).ToHashSet());
+                Log.Info($"areaportals: round {round}: {invalid.Count} portal(s) do not divide two areas (an open window or gap joins them) and are removed");
+                vis = null;
+            }
+
+            if (compile == null || vis == null || pass.Added.Count == 0)
+            {
+                pass.RevertAll();
+                Log.Warn("areaportals: none could be placed");
+                return 0;
+            }
+
+            var ranked = AreaportalSelection.Rank(pass, vis, BspSpace.Load(compile.Bsp), samples);
+            var keep = AreaportalSelection.Choose(pass, ranked, slots);
+            int dropped = pass.Added.Count - keep.Count;
+            pass.KeepOnly(keep);
+            if (dropped > 0)
+                Log.Info($"areaportals: {dropped} portal(s) worth least left out to stay within the budget");
+
+            // Leaving portals out reopens their doorways, which can join the two sides of one that is kept.
+            // The flood finds those before compiling; anything it misses shows up as a leak below.
+            var stillSealed = pass.SealedDoorways(pass.Added.Select(a => a.Doorway).ToList(),
+                SourceKit.Compile.PortalFile.Load(baseline.Prt), space).ToHashSet();
+            int unsealed = pass.Added.Count(a => !stillSealed.Contains(a.Doorway));
+            if (unsealed > 0)
+            {
+                pass.KeepOnly(pass.Added.Where(a => stillSealed.Contains(a.Doorway)).Select(a => a.Portal).ToHashSet());
+                Log.Info($"areaportals: {unsealed} more no longer divide two areas once the others are left out");
+            }
+
+            // The set kept is proven by its own compile.
+            for (int round = 1; round <= 6 && pass.Added.Count > 0; round++)
+            {
+                compile = WorkCompile.Prepare(working, copy, folder, name);
+                var run = compile.RunVbsp(tools);
+                if (compile.Leaked)
+                {
+                    var leak = compile.LeakPath!;
+                    var near = pass.Added.Where(a => leak.Points.Any(p => Distance(p, a.Doorway) < 64)).Select(a => a.Portal).ToHashSet();
+                    if (near.Count == 0)
+                    {
+                        pass.RevertAll();
+                        Log.Warn("areaportals: undone, the chosen set leaks somewhere no new portal is near");
+                        return 0;
+                    }
+                    pass.KeepOnly(pass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet());
+                    Log.Info($"areaportals: the chosen set leaked; {near.Count} portal(s) on the leak path removed");
+                    continue;
+                }
+                if (!run.Succeeded)
+                {
+                    pass.RevertAll();
+                    Log.Warn($"areaportals: undone, VBSP failed: {LastLines(run)}");
+                    return 0;
+                }
+                vis = BspVisibilityData.Load(compile.Bsp);
+                var invalid = AreaportalSelection.Invalid(pass, vis);
+                if (invalid.Count == 0)
+                    break;
+                pass.KeepOnly(pass.Added.Select(a => a.Portal).Except(invalid).ToHashSet());
+            }
+            if (pass.Added.Count == 0)
+            {
+                Log.Warn("areaportals: none could be placed");
+                return 0;
+            }
+
+            int differences = BspSpace.CollisionDifferences(BspSpace.Load(compile!.Bsp).CollisionShapes(CollisionMask), collision);
+            if (differences > 0 || vis!.HighestPortalNumber > Audit.PortalBudget)
+            {
+                pass.RevertAll();
+                Log.Warn(differences > 0
+                    ? $"areaportals: undone, collision changed ({differences} brushes)"
+                    : $"areaportals: undone, a portal would be numbered {vis.HighestPortalNumber}, past what Garry's Mod loads");
+                return 0;
+            }
+
+            // What the closing portals hide beyond what VVIS already culls needs this set's own visibility.
+            var visRun = compile.RunVvis(tools);
+            string shutReport = "";
+            if (visRun.Succeeded)
+            {
+                vis = BspVisibilityData.Load(compile.Bsp);
+                var shut = pass.Added.Where(a => a.Doorway.Closes)
+                    .Select(a => vis.PortalNumbersByName.GetValueOrDefault(a.Portal.Get("targetname")!, -1)).Where(k => k >= 0).ToHashSet();
+                var (open, closedCost) = AreaportalSelection.VisibleWithDoorsShut(vis, BspSpace.Load(compile.Bsp), samples, shut);
+                shutReport = $"with those doors shut, {closedCost:N0} triangles are visible from a standing position on average, against {open:N0} with them open";
+            }
+
+            pass.Declare(guard);
+            int closing = pass.Added.Count(a => a.Doorway.Closes);
+            int named = pass.Added.Count(a => a.NamedDoor);
+            Log.Check($"areaportals: {pass.Added.Count} added ({closing} close with their door, {named} door(s) given a name); " +
+                $"{vis.HighestPortalNumber} of {Audit.PortalBudget} portal numbers used; {vis.AreaCount - 1} areas");
+            if (shutReport.Length > 0)
+                Log.Check($"areaportals: {shutReport}");
+            final = compile;
+            return pass.Added.Count;
+        }
+
+        private static double Distance(SourceKit.Geometry.Vec3 p, Doorway d)
+        {
+            var lo = d.Mins;
+            var hi = d.Maxs;
+            double dx = Math.Max(0, Math.Max(lo.X - p.X, p.X - hi.X));
+            double dy = Math.Max(0, Math.Max(lo.Y - p.Y, p.Y - hi.Y));
+            double dz = Math.Max(0, Math.Max(lo.Z - p.Z, p.Z - hi.Z));
+            return Math.Sqrt(dx * dx + dy * dy + dz * dz);
         }
 
         /// <summary>
@@ -263,7 +462,7 @@ namespace Viswright
         {
             if (compile.VvisRun is { Succeeded: false } vis)
                 return $"VVIS failed: {LastLines(vis)}";
-            int differences = BspSpace.CollisionDifferences(BspSpace.Load(compile.Bsp).CollisionShapes(-1), collision);
+            int differences = BspSpace.CollisionDifferences(BspSpace.Load(compile.Bsp).CollisionShapes(CollisionMask), collision);
             if (differences > 0)
                 return $"collision changed ({differences} brushes have no counterpart)";
             if (after.SampledTriangles > before.SampledTriangles * CostTolerance)

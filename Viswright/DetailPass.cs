@@ -58,7 +58,7 @@ namespace Viswright
                 // An areaportal has to be sealed by world brushes; detail around it leaks the area.
                 if (frames.Any(f => Touches(f, brush)))
                     continue;
-                if (compiled != null && FacesTheVoid(brush, compiled))
+                if (compiled != null && Seals(brush, compiled))
                     continue;
 
                 result.Add((solid, brush));
@@ -143,13 +143,28 @@ namespace Viswright
         }
 
         /// <summary>
-        /// Whether any face of the brush looks out into the void: a point just in front of the face is
-        /// outside the map. Half a unit in front, so that a brush plugging a thin seam between two outer
-        /// walls is caught too - its face looks into the seam, and the seam is open to the void.
-        /// Tested at the centre and at points between the centre and each corner and edge.
+        /// Whether the brush seals something detail could not: a face looks out into the void, or its
+        /// faces look into two different areas, so that it is part of what keeps an areaportal's two sides
+        /// apart. Points are tested half a unit in front of each face - so that a brush plugging a thin
+        /// seam is caught too, its face looking into the seam - at the centre and between the centre and
+        /// each corner and edge.
         /// </summary>
-        private static bool FacesTheVoid(VmfBrush brush, BspSpace compiled)
+        private static bool Seals(VmfBrush brush, BspSpace compiled)
         {
+            int area = -1;
+            bool Sees(Vec3 point)
+            {
+                if (compiled.IsOutside(point))
+                    return true;
+                if (compiled.IsSolid(point))
+                    return false;
+                int here = compiled.AreaAt(point);
+                if (area >= 0 && here != area)
+                    return true;
+                area = here;
+                return false;
+            }
+
             foreach (var face in brush.Faces)
             {
                 if (face.Winding == null)
@@ -157,7 +172,7 @@ namespace Viswright
                 var points = face.Winding.Points;
                 var centre = face.Winding.Centre;
                 var offset = face.Plane.Normal * 0.5;
-                if (compiled.IsOutside(centre + offset))
+                if (Sees(centre + offset))
                     return true;
                 for (int i = 0; i < points.Count; i++)
                 {
@@ -165,7 +180,7 @@ namespace Viswright
                     var middle = (corner + points[(i + 1) % points.Count]) / 2;
                     foreach (var edgePoint in new[] { corner, middle })
                         foreach (double toward in new[] { 0.1, 0.5 })
-                            if (compiled.IsOutside(edgePoint + (centre - edgePoint) * toward + offset))
+                            if (Sees(edgePoint + (centre - edgePoint) * toward + offset))
                                 return true;
                 }
             }
