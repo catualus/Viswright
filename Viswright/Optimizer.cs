@@ -29,6 +29,17 @@ namespace Viswright
         /// <summary>Pass C: put an areaportal in the doorway of each door that has none.</summary>
         public bool Areaportals { get; init; }
 
+        /// <summary>Pass E: give static props with no fade one, where they shrink to <see cref="FadePixels"/> pixels.</summary>
+        public bool Fades { get; init; }
+
+        public double FadePixels { get; init; } = 6;
+
+        /// <summary>Pass F: turn entities that do nothing an entity can do into static props and func_detail.</summary>
+        public bool Slim { get; init; }
+
+        /// <summary>Folders of Lua to scan for class lookups, on top of the game's own gamemodes and addons.</summary>
+        public IReadOnlyList<string> LuaPaths { get; init; } = [];
+
         /// <summary>The compilers every pass is checked with. Needed when any pass is on.</summary>
         public Toolchain? Tools { get; init; }
     }
@@ -76,7 +87,7 @@ namespace Viswright
                 Log.Info($"{relocated} instance path(s) re-pointed so the copy finds the same files");
 
             int detailed = 0, nodrawn = 0, portals = 0;
-            if (options.Detail || options.Nodraw || options.Areaportals)
+            if (options.Detail || options.Nodraw || options.Areaportals || options.Fades || options.Slim)
                 (detailed, nodrawn, portals) = RunPasses(options, working, copy, guard);
 
             var changes = VmfDiff.Compare(original, working);
@@ -201,7 +212,143 @@ namespace Viswright
                     Log.Check("nodraw: no face is fully hidden");
             }
 
+            if (options.Fades)
+                RunFades(options, working, reference, content, guard, Path.Combine(work, "fades.txt"));
+            if (options.Slim)
+                RunSlimming(options, working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard);
+
             return (detailed, nodrawn, portals);
+        }
+
+        private static void RunFades(OptimizeOptions options, VmfDocument working, WorkCompile reference, GameContent content,
+            ChangeGuard guard, string listFile)
+        {
+            // The 3D skybox is the area the sky_camera stands in.
+            var space = BspSpace.Load(reference.Bsp);
+            int skyArea = -1;
+            var camera = working.Entities.FirstOrDefault(e => string.Equals(e.Classname, "sky_camera", StringComparison.OrdinalIgnoreCase));
+            if (camera != null && SourceKit.Geometry.Vec3.TryParse(camera.Get("origin") ?? "", out var cameraOrigin))
+                skyArea = space.AreaAt(cameraOrigin);
+
+            var pass = new PropFadePass(options.FadePixels, (space.Maxs - space.Mins).Length);
+            int count = pass.Apply(working, content, p => skyArea >= 0 && space.AreaAt(p) == skyArea);
+            pass.Declare(guard);
+            Log.Check($"fades: {count} static prop(s) given a fade, where they shrink to {options.FadePixels:0.#} pixels at 1080p and 90 degrees");
+            foreach (var (reason, n) in pass.Skipped.OrderByDescending(kv => kv.Value))
+                Log.Info($"  {n} left alone: {reason}");
+            foreach (var (model, (n, max)) in pass.Models.OrderByDescending(kv => kv.Value.Count).Take(8))
+                Log.Info($"  {model}: {n} prop(s), fading out by {max:N0} units");
+            if (pass.Models.Count > 0)
+            {
+                File.WriteAllLines(listFile, pass.Models.Select(kv => $"{kv.Key}\t{kv.Value.Count}\t{kv.Value.Max}"));
+                Log.Info($"  every model and its distance: {listFile}");
+            }
+        }
+
+        private static void RunSlimming(OptimizeOptions options, VmfDocument working, string copy, string folder, string name,
+            Toolchain tools, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard)
+        {
+            var lua = LuaGuard.Scan(LuaGuard.GameFolders(tools.GameFolder).Concat(options.LuaPaths));
+            Log.Info($"slim: {lua.FilesScanned:N0} Lua file(s) scanned; {lua.Classes.Count} class(es) looked up by class name");
+
+            var pass = new SlimmingPass();
+            int count = pass.Apply(working, content, lua);
+            foreach (var (why, many) in pass.Skipped.OrderByDescending(kv => kv.Value).Take(8))
+                Log.Info($"  {many} left as entities: {why}");
+            foreach (var (cls, lookup, file) in pass.Protected)
+                Log.Info($"  {cls} protected: Lua looks up \"{lookup}\" in {file}");
+            if (pass.LightingChanges > 0)
+                Log.Info($"  {pass.LightingChanges} func_brush left alone: as func_detail it would cast a lightmap shadow it does not cast now");
+            if (count == 0)
+            {
+                Log.Check("slim: no entity can be made static");
+                return;
+            }
+
+            // The map as the passes before this one left it, to count against.
+            pass.RevertAll();
+            var before = WorkCompile.Prepare(working, copy, folder + "-before", name);
+            if (!before.RunVbsp(tools).Succeeded || before.Leaked)
+            {
+                Log.Warn("slim: skipped, the map does not compile cleanly before it");
+                return;
+            }
+            var countsBefore = EntityCounts(before.Bsp);
+            pass = new SlimmingPass();
+            count = pass.Apply(working, content, lua);
+
+            // VBSP refuses a static prop whose model was not built for it, and deletes the prop.
+            var compile = WorkCompile.Prepare(working, copy, folder, name);
+            var run = compile.RunVbsp(tools);
+            var refused = run.Output
+                .Where(l => l.Contains("staticprop", StringComparison.OrdinalIgnoreCase) || l.Contains("static prop", StringComparison.OrdinalIgnoreCase)
+                    || l.Contains("prop_static", StringComparison.OrdinalIgnoreCase))
+                .SelectMany(l => System.Text.RegularExpressions.Regex.Matches(l, @"models[/\\][^""\s!]+?\.mdl", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                .Select(m => m.Value.Replace('\\', '/').ToLowerInvariant()).ToHashSet();
+            int back = refused.Count > 0 ? pass.RevertModels(refused) : 0;
+            if (back > 0)
+            {
+                foreach (string model in refused.Take(5))
+                    Log.Info($"  VBSP would not take {model} as a static prop");
+                compile = WorkCompile.Prepare(working, copy, folder, name);
+                run = compile.RunVbsp(tools);
+            }
+
+            string? reason = compile.Leaked ? "the map leaked"
+                : !run.Succeeded ? $"VBSP failed: {LastLines(run)}"
+                : BspSpace.CollisionDifferences(BspSpace.Load(compile.Bsp).CollisionShapes(CollisionMask), collision) is > 0 and var n
+                    ? $"collision changed ({n} brushes)" : null;
+            if (reason != null)
+            {
+                pass.RevertAll();
+                Log.Warn($"slim: undone, {reason}");
+                return;
+            }
+
+            int props = pass.Converted.Count(c => c.Before.StartsWith("prop_", StringComparison.OrdinalIgnoreCase));
+            int brushes = pass.Converted.Count - props;
+
+            // Every prop converted must arrive as a static prop: VBSP drops one it will not take with no
+            // more than a line in its log.
+            var countsAfter = EntityCounts(compile.Bsp);
+            if (countsBefore.Entities - countsAfter.Entities != pass.Converted.Count || countsAfter.StaticProps - countsBefore.StaticProps != props)
+            {
+                pass.RevertAll();
+                Log.Warn($"slim: undone, the counts do not add up: entities {countsBefore.Entities} -> {countsAfter.Entities}, " +
+                    $"static props {countsBefore.StaticProps} -> {countsAfter.StaticProps}, for {props} prop(s) and {brushes} brush(es) converted");
+                return;
+            }
+
+            pass.Declare(guard);
+            Log.Check($"slim: {props} prop_dynamic made prop_static, {brushes} func_brush made func_detail: {pass.Converted.Count} fewer entities" +
+                (back > 0 ? $" ({back} put back: VBSP would not take their model as static)" : ""));
+        }
+
+        /// <summary>Entities in a compiled map's entity lump, and props in its static prop lump.</summary>
+        private static (int Entities, int StaticProps) EntityCounts(string bsp)
+        {
+            var bytes = File.ReadAllBytes(bsp);
+            int entityOffset = BitConverter.ToInt32(bytes, 8), entityLength = BitConverter.ToInt32(bytes, 12);
+            string entities = System.Text.Encoding.Latin1.GetString(bytes, entityOffset, entityLength);
+            int count = 0;
+            for (int at = 0; (at = entities.IndexOf("\"classname\"", at, StringComparison.Ordinal)) >= 0; at++)
+                count++;
+
+            // Game lump 35: a count, then 16-byte headers; the static prop lump is 'sprp'. Its body is a
+            // model dictionary of 128-byte names, a leaf list of shorts, then the prop count.
+            int gameOffset = BitConverter.ToInt32(bytes, 8 + 35 * 16);
+            int lumps = BitConverter.ToInt32(bytes, gameOffset);
+            for (int i = 0; i < lumps; i++)
+            {
+                int header = gameOffset + 4 + i * 16;
+                if (BitConverter.ToInt32(bytes, header) != 0x73707270)
+                    continue;
+                int at = BitConverter.ToInt32(bytes, header + 8);
+                at += 4 + BitConverter.ToInt32(bytes, at) * 128;
+                at += 4 + BitConverter.ToInt32(bytes, at) * 2;
+                return (count, BitConverter.ToInt32(bytes, at));
+            }
+            return (count, 0);
         }
 
         /// <summary>

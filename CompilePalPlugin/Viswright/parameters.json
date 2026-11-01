@@ -16,6 +16,38 @@
     "Description": "Make faces nodraw when they are pressed flat against an opaque solid brush and so can never be seen - mainly world faces behind func_detail, which VBSP does not remove itself. Saves faces and lightmap space. A face is only changed when all of it is proven covered."
   },
   {
+    "Name": "Fade static props",
+    "Parameter": " -fades",
+    "Description": "Give static props that never fade a fade distance: where the prop shrinks to a few pixels on a 1080p screen at a 90 degree field of view. Props that already fade, props in the 3D skybox, large landmark props, models marked never to fade, and props whose fade would lie beyond the map are left alone. Every model and its distance is listed in the output.",
+    "Warning": "Changes how far props are drawn. The default of 6 pixels is chosen so nobody notices; raise Fade pixels for a bigger saving with some popping."
+  },
+  {
+    "Name": "Fade pixels",
+    "Parameter": " -fadepixels",
+    "CanHaveValue": true,
+    "Value": "6",
+    "Options": [
+      "6",
+      "10",
+      "16"
+    ],
+    "Description": "How small a prop must look before it fades: 6 is conservative, 10 balanced, 16 aggressive. Only used with Fade static props."
+  },
+  {
+    "Name": "Fewer entities",
+    "Parameter": " -slim",
+    "Description": "Turn prop_dynamic that nothing names, parents, fires, animates or lets the physgun move into prop_static, and plain always-solid func_brush into func_detail, freeing edicts and network traffic. A func_brush is only changed when it already casts a lightmap shadow, so lighting stays the same. Classes that the game's gamemodes, addons or the Lua folders below look up by class are left alone.",
+    "Warning": "Converted entities no longer exist as entities. Lua that finds them some other way than by class would not find them."
+  },
+  {
+    "Name": "Lua folder",
+    "Parameter": " -luapath",
+    "CanHaveValue": true,
+    "ValueIsFolder": true,
+    "CanBeUsedMoreThanOnce": true,
+    "Description": "A folder of Lua - a gamemode or addons outside the game folder - to check before Fewer entities converts anything. The game's own gamemodes and addons are always checked."
+  },
+  {
     "Name": "Report only",
     "Parameter": " -dryrun",
     "Description": "Work out and report every change, but compile the map as it is."

@@ -5,8 +5,8 @@ mappers do by hand - func_detail, nodraw on hidden faces, areaportals in doorway
 fade distances - on a copy of the map, proves each change with the real compilers, and backs out
 anything that does not pay for itself.
 
-**Status: phase 3.** Three passes, all opt-in while in beta: **Areaportals in doorways**, **Make detail**
-and **Hide covered faces**.
+**Status: phase 4.** Five passes, all opt-in while in beta: **Areaportals in doorways**, **Make detail**,
+**Hide covered faces**, **Fade static props** and **Fewer entities**.
 Every compile audits the map, runs the ticked passes, checks the copy differs only in what they are
 allowed to change, and hands it to VBSP; a second step measures the compiled map's visibility after
 VVIS.
@@ -43,6 +43,22 @@ this between two world brushes and between two detail brushes; this covers world
 detail against world, which it does not. A material counts as opaque only when its VMT says so; one
 that cannot be found never hides anything.
 
+**Fade static props** (`-fades`, `-fadepixels N`) gives a prop_static that never fades a fade distance:
+where its bounding sphere shrinks to N pixels on a 1920-wide screen at a 90 degree field of view (6 by
+default, a size nobody notices; 10 balanced, 16 aggressive). Props in the 3D skybox, landmarks over 512
+units across, models marked never to fade, and props whose fade would lie beyond the map are left
+alone. Every model and its distance is written to `fades.txt` in the work folder.
+
+**Fewer entities** (`-slim`, `-luapath <folder>`) turns a prop_dynamic that nothing names, parents, fires,
+animates, breaks, recolours or lets the physgun move into a prop_static, and an always-solid, unnamed
+func_brush that already casts lightmap shadows into func_detail. Each frees an edict and the network
+traffic of an entity. A prop is converted only if VBSP will take its model as a static prop - compiled
+with `$staticprop`, and with no `prop_data` unless it says `allowstatic` - and is given
+`disableshadows 1`, so the lightmaps stay as they were. Any class the game's gamemodes and addons, or the
+Lua folders named, look entities up by is left alone. After compiling, the entity count must fall and
+the static prop count rise by exactly the number converted, or the pass is undone; a prop VBSP still
+refuses (its copy of a model can differ from the one Viswright reads) is put back.
+
 "More visible" is measured at about 30,000 standing positions, found once from the first compile:
 points at eye height above solid ground on a 128-unit grid. Two compiles do not share clusters, but
 they share these points, so the triangles visible from each can be compared directly.
@@ -76,6 +92,15 @@ With all three passes (2026-11-01):
 The world triangles a shut door saves are few, because VVIS already hides most interiors from the street.
 What a closed areaportal also does - stop drawing the props and entities behind it, and stop the server
 sending them - is not in that figure.
+
+Fades and Fewer entities (2026-11-01, 6 pixels):
+
+| | rp_downtown_prominence_d | rp_downtown_meowy |
+| --- | --- | --- |
+| Static props given a fade | 374 (mostly rebar debris, 5,000-10,000 units) | 29 (it already fades nearly all) |
+| prop_dynamic made prop_static | 30 | 23 |
+| Left as entities | named, parented, physgun-movable, physics models | the same, and 51 models not compiled for static use |
+| func_brush made func_detail | 0 (all never solid, named, or without lightmap shadows) | 0 |
 
 In Garry's Mod, the optimised prominence loads with all 191 portal numbers in use. At a storefront door
 given a portal, wireframe rendering shows nothing behind the shut door and the whole plaza once it opens.
@@ -132,6 +157,7 @@ viswright audit <map.vmf>
 viswright report <map.bsp>
 viswright diff <a.vmf> <b.vmf>
 viswright collision <a.bsp> <b.bsp>
+viswright model <models/x.mdl> -game <folder>
 viswright status <map.vmf>
 ```
 

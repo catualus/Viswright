@@ -42,6 +42,7 @@ namespace Viswright
                     "report" => Report(args),
                     "diff" => Diff(args),
                     "collision" => CollisionCommand(args),
+                    "model" => ModelCommand(args),
                     "status" => Status(args),
                     "help" or "-help" or "--help" or "/?" => Usage(),
                     _ => Unknown(args[0]),
@@ -63,7 +64,7 @@ namespace Viswright
         private static int Optimize(string[] args)
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-vbsp", "-vvis", "-game" };
+                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-vbsp", "-vvis", "-game" };
             RefuseUnknownFlags(args, known);
 
             string input = Positional(args, 1) ?? throw new ArgumentException("optimize needs the VMF to read.");
@@ -82,6 +83,13 @@ namespace Viswright
                 Detail = HasFlag(args, "-detail"),
                 Nodraw = HasFlag(args, "-nodraw"),
                 Areaportals = HasFlag(args, "-areaportals"),
+                Fades = HasFlag(args, "-fades"),
+                FadePixels = TryGetFlagValue(args, "-fadepixels", out string? pixels)
+                    ? (double.TryParse(pixels, NumberStyles.Float, CultureInfo.InvariantCulture, out double p) && p >= 1 && p <= 64 ? p
+                        : throw new ArgumentException($"-fadepixels needs a number of pixels from 1 to 64, not '{pixels}'."))
+                    : 6,
+                Slim = HasFlag(args, "-slim"),
+                LuaPaths = AllFlagValues(args, "-luapath"),
                 Tools = tools,
             });
 
@@ -123,6 +131,20 @@ namespace Viswright
                 Log.Error($"an areaportal is numbered {report.HighestPortalNumber}; Garry's Mod refuses to load a map with one above {VisReport.GmodMaxPortalNumber}");
                 return 1;
             }
+            return 0;
+        }
+
+        /// <summary>What Viswright reads from a model: for finding out why a prop was or was not changed.</summary>
+        private static int ModelCommand(string[] args)
+        {
+            string path = Positional(args, 1) ?? throw new ArgumentException("model needs a model path, such as models/props_c17/door01_left.mdl.");
+            if (!TryGetFlagValue(args, "-game", out string? game))
+                throw new ArgumentException("model needs -game <folder>.");
+            var model = GameContent.Open(game!).Model(path) ?? throw new FileNotFoundException($"{path} was not found in the game's content.");
+            Console.Out.WriteLine($"version {model.Version}, flags 0x{model.Flags:X}, static prop {model.StaticProp}, usable as prop_static {model.UsableAsStaticProp}");
+            Console.Out.WriteLine($"hull ({model.HullMin}) - ({model.HullMax})");
+            Console.Out.WriteLine($"textures: {string.Join(", ", model.TextureNames)} in {string.Join(", ", model.TextureFolders)}");
+            Console.Out.WriteLine($"keyvalues: {(model.KeyValues.Length == 0 ? "(none)" : model.KeyValues)}");
             return 0;
         }
 
@@ -240,12 +262,16 @@ namespace Viswright
                 viswright - automatic visibility optimisation for Source maps
 
                   viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N]
-                                     [-areaportals] [-detail] [-nodraw] -vbsp <exe> -vvis <exe> -game <folder>
+                                     [-areaportals] [-detail] [-nodraw] [-fades [-fadepixels N]]
+                                     [-slim [-luapath <folder>]...] -vbsp <exe> -vvis <exe> -game <folder>
                       Optimise a copy of the map and hand it to the rest of the compile. The map
                       itself is never written. -source names the map as queued when <map.vmf> is an
                       earlier step's copy; -dryrun reports without handing anything on.
                       -areaportals puts an areaportal in the doorway of each door that has none,
                       within Garry's Mod's limit of 191, keeping those that hide the most.
+                      -fades gives static props with no fade one where they shrink to N pixels
+                      (default 6). -slim turns entities that do nothing an entity can do into
+                      static props and func_detail, unless Lua looks their class up.
                       -detail makes small and complex world brushes func_detail; -nodraw makes
                       faces hidden against opaque brushes nodraw. Both are checked by compiling
                       with the compilers named, and undone if the map leaks, its collision
@@ -295,7 +321,16 @@ namespace Viswright
         }
 
         private static readonly HashSet<string> ValueFlags = new(StringComparer.OrdinalIgnoreCase)
-            { "-source", "-threads", "-vbsp", "-vvis", "-game" };
+            { "-source", "-threads", "-vbsp", "-vvis", "-game", "-fadepixels", "-luapath" };
+
+        private static List<string> AllFlagValues(string[] args, string flag)
+        {
+            var values = new List<string>();
+            for (int i = 0; i + 1 < args.Length; i++)
+                if (args[i].Equals(flag, StringComparison.OrdinalIgnoreCase))
+                    values.Add(args[i + 1]);
+            return values;
+        }
 
         private static bool TakesValue(string flag) => ValueFlags.Contains(flag);
 
