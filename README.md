@@ -34,8 +34,12 @@ pillars, stairs, frames. Left out: brushes that face the void (checked against t
 frame an areaportal, look into two different areas (they keep an areaportal's sides apart), are water,
 are a unit or two thin, or are in a visgroup named `viswright_ignore`.
 The map is then compiled; if it leaks, every brush the leak path runs through goes back to being world
-and it is compiled again. The pass is undone if the leaks will not stop, if any collision brush is lost,
-added, moved or changes contents, or if more becomes visible from where a player stands.
+and it is compiled again. Detail merges the leaves its brushes no longer cut, and a merged leaf sees
+everything any of its parts saw, so the street beside a run of trim can end up seeing more. After
+VVIS, every detailed brush whose standing points within 384 units see more in total goes back to being
+world, and the map is compiled again, up to three times. The pass is undone if the leaks will not stop,
+if any collision brush is lost, added, moved or changes contents, or if more is still visible from where
+a player stands.
 
 **Hide covered faces** (`-nodraw`) makes a face nodraw when all of it is pressed against faces of solid
 brushes whose every material is opaque, so it can only be seen from inside a brush. VBSP already does
@@ -125,14 +129,19 @@ can reach):
 | --- | --- | --- |
 | Before | 5,338 clusters, 13,489 portals, 6,472 triangles visible, VVIS 22.6 s | 5,169 clusters, 12,925 portals, 6,941 triangles, VVIS 20.5 s |
 | Areaportals | 69 added; 6,484 triangles visible, 6,327 with the new doors shut | 74 added; 6,972, 6,798 with them shut |
-| Make detail | undone: 6,626 triangles visible against 6,484 | undone: 7,084 against 6,972 |
+| Make detail, all candidates | 455 brushes: 6,626 triangles visible against 6,484 | 310 brushes: 7,084 against 6,972 |
+| Make detail, kept where no more is seen | 27 brushes: 6,473 | 33 brushes: 6,945 |
 | Hide covered faces | 219 faces | 92 faces |
 | Fades / Fewer entities | 374 props / 30 entities | 29 props / 23 entities |
 | Hints over open ground | undone: 0.3% less seen (6,441 against 6,460), under the 1% bar | undone: 0.8% less (6,913 against 6,968) |
 | Time | 12 minutes, 6 of them the hint search | 11 minutes |
 
-At the block size these maps are really compiled with, Make detail makes more visible from the
-streets, and the run undoes it - the figures from default options above do not carry over. Hints do
+At the block size these maps are really compiled with, detailing every candidate makes more visible
+from the streets: only about a fifth of what newly appears lies behind a brush that became detail, the
+rest is leaves merging. Keeping detail only where the points around each brush see no more leaves
+under a tenth of the candidates and changes almost nothing - VVIS++ already takes about 22 seconds on
+these maps, so there is little for detail to save. The figures from default options above do not carry
+over. Hints do
 not pay on either map: about 15 of 120 squares see 2% less on their own, but together they save under
 1%. The streets are walled in up to the sky, so there is little over the rooftops for a hint to cut
 off, and VVIS++'s leaves are already tight.

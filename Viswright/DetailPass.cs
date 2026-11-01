@@ -99,6 +99,15 @@ namespace Viswright
             return hit.Count;
         }
 
+        /// <summary>Puts back every moved brush <paramref name="back"/> picks. Returns how many went back.</summary>
+        public int RevertWhere(Func<VmfBrush, bool> back)
+        {
+            var hit = moved.Where(kv => back(kv.Value)).Select(kv => kv.Key).ToList();
+            foreach (var solid in hit)
+                Revert(solid);
+            return hit.Count;
+        }
+
         /// <summary>Puts every moved brush back and removes the func_detail entity.</summary>
         public void RevertAll()
         {
@@ -238,7 +247,7 @@ namespace Viswright
             }
         }
 
-        private static double DistanceToBox(Vec3 p, Vec3 mins, Vec3 maxs)
+        internal static double DistanceToBox(Vec3 p, Vec3 mins, Vec3 maxs)
         {
             double dx = Math.Max(0, Math.Max(mins.X - p.X, p.X - maxs.X));
             double dy = Math.Max(0, Math.Max(mins.Y - p.Y, p.Y - maxs.Y));

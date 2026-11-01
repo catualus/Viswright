@@ -164,5 +164,21 @@ namespace Viswright.Tests
 
             Assert.Empty(VmfDiff.Compare(before, map));
         }
+
+        [Fact]
+        public void RevertingSomeKeepsTheRestAndTheLastTakesTheEntity()
+        {
+            var map = Map(Box(2, 0, 0, 0, 32, 32, 32) + Box(3, 100, 0, 0, 132, 32, 32));
+            var before = VmfDocument.Parse(map.ToString());
+            var pass = new DetailPass(map);
+            pass.Apply(DetailPass.Candidates(map));
+
+            Assert.Equal(1, pass.RevertWhere(b => b.Mins.X < 50));
+            Assert.Equal(new long?[] { 3 }, pass.Moved.Select(s => s.Id));
+            Assert.Single(map.Entities);
+
+            Assert.Equal(1, pass.RevertWhere(_ => true));
+            Assert.Empty(VmfDiff.Compare(before, map));
+        }
     }
 }

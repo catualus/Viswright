@@ -173,6 +173,11 @@ namespace Viswright
                 if (compile != null && pass.Moved.Count > 0)
                 {
                     compile.RunVvis(tools);
+                    if (compile.VvisRun!.Succeeded)
+                        compile = KeepDetailWhereNoMoreIsSeen(pass, compile, reference, samples, working, copy, Path.Combine(work, "detail"), name, tools);
+                }
+                if (compile != null && pass.Moved.Count > 0)
+                {
                     var after = CompileMeasure.Of(compile, samples);
                     string? reason = Rejection(compile, collision, current, after);
                     if (reason != null)
@@ -335,6 +340,48 @@ namespace Viswright
             pass.Declare(guard);
             Log.Check($"slim: {props} prop_dynamic made prop_static, {brushes} func_brush made func_detail: {pass.Converted.Count} fewer entities" +
                 (back > 0 ? $" ({back} put back: VBSP would not take their model as static)" : ""));
+        }
+
+        /// <summary>How far from a detailed brush standing points count as around it.</summary>
+        private const double DetailReach = 384;
+
+        /// <summary>
+        /// Puts back as world every detailed brush whose surroundings see more than before, and compiles
+        /// again, up to three times. Detail merges the leaves it no longer splits, and a merged leaf sees
+        /// everything any of its parts saw: near a wall of trim or a run of pillars, the street can end up
+        /// seeing more, which the leaves cut by those brushes kept apart. Brushes where nobody stands
+        /// nearby, or where the points around them see the same or less, stay detail.
+        /// </summary>
+        private static WorkCompile? KeepDetailWhereNoMoreIsSeen(DetailPass pass, WorkCompile compile, WorkCompile reference, SamplePoints samples,
+            VmfDocument working, string copy, string folder, string name, Toolchain tools)
+        {
+            var before = CompileMeasure.PerPoint(reference, samples);
+            for (int round = 1; round <= 3 && pass.Moved.Count > 0; round++)
+            {
+                var after = CompileMeasure.PerPoint(compile, samples);
+                var changes = new List<(SourceKit.Geometry.Vec3 Point, double Change)>();
+                for (int i = 0; i < before.Length; i++)
+                    if (before[i] >= 0 && after[i] >= 0 && after[i] != before[i])
+                        changes.Add((samples.Points[i], after[i] - before[i]));
+
+                int back = pass.RevertWhere(brush =>
+                    changes.Where(r => DetailPass.DistanceToBox(r.Point, brush.Mins, brush.Maxs) <= DetailReach).Sum(r => r.Change) > 0);
+                if (back == 0)
+                    break;
+                Log.Info($"detail: round {round}: {back} brush(es) stay world, the points around them see more as detail");
+                if (pass.Moved.Count == 0)
+                    return null;
+
+                // Putting world back cannot open a leak, but a compile that fails is still no compile.
+                compile = WorkCompile.Prepare(working, copy, folder, name);
+                if (!compile.RunVbsp(tools).Succeeded || compile.Leaked || !compile.RunVvis(tools).Succeeded)
+                {
+                    pass.RevertAll();
+                    Log.Warn("detail: undone, the map stopped compiling cleanly once brushes were put back");
+                    return null;
+                }
+            }
+            return compile;
         }
 
         /// <summary>Gain a square's own standing points must see for its hint to be kept.</summary>
