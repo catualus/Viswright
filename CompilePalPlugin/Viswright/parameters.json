@@ -87,6 +87,23 @@
     "Description": "Measure the review's PVS slack on the CPU even when there is a GPU. The GPU is about ten times faster and casts four times as many rays; the CPU is used anyway when no GPU with Direct3D 12 is found."
   },
   {
+    "Name": "Accept the review",
+    "Parameter": " -accept",
+    "Description": "Accept every item the last review left waiting, after taking in what you changed in the review VMF in Hammer (deleted changes are denied, moved hints and areaportals are kept where you put them, markers in Viswright/Accept are accepted). From then on compiles apply exactly the accepted items, with no search. Untick it once the map is decided."
+  },
+  {
+    "Name": "Mode",
+    "Parameter": " -mode",
+    "CanHaveValue": true,
+    "Value": "auto",
+    "Options": [
+      "auto",
+      "review",
+      "pinned"
+    ],
+    "Description": "Leave off for the usual flow: a review on a map's first run (the compile uses the map as it is), pinned once every item is decided. auto searches and applies whatever proves itself on every compile; review always reviews; pinned always applies the decided items."
+  },
+  {
     "Name": "Report only",
     "Parameter": " -dryrun",
     "Description": "Work out and report every change, but compile the map as it is."

@@ -153,6 +153,18 @@ namespace Viswright
             converted.Clear();
         }
 
+        /// <summary>Puts back the converted entities <paramref name="back"/> picks. Returns how many.</summary>
+        public int RevertWhere(Func<VmfNode, bool> back)
+        {
+            var picked = converted.Where(c => back(c.Entity)).ToList();
+            foreach (var (entity, before) in picked)
+            {
+                Restore(entity, before);
+                converted.Remove((entity, before));
+            }
+            return picked.Count;
+        }
+
         private void Restore(VmfNode entity, string classname)
         {
             entity.Set("classname", classname);

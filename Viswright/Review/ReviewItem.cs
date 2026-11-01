@@ -24,6 +24,9 @@ namespace Viswright.Review
         /// <summary>A line of detail for the reader: a model, a fade distance, a door name.</summary>
         public string? Detail { get; init; }
 
+        /// <summary>What applying the item again needs beyond its id and box, as <see cref="DecidedItem.Data"/> keeps it.</summary>
+        public IReadOnlyDictionary<string, double> Data { get; init; } = new Dictionary<string, double>();
+
         /// <summary>Ids of the map objects the item added or changed, when it was applied.</summary>
         public IReadOnlyList<long> NodeIds { get; init; } = [];
 

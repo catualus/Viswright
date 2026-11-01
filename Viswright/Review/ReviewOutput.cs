@@ -23,7 +23,7 @@ namespace Viswright.Review
 
         /// <summary>Writes everything and returns the page's path.</summary>
         public static string Write(string folder, string name, VmfDocument working, ReviewLog log, SamplePoints samples,
-            WorkCompile baseline, WorkCompile? final, Slack? slackBefore = null, Slack? slackAfter = null)
+            WorkCompile baseline, WorkCompile? final, Slack? slackBefore = null, Slack? slackAfter = null, string decisionsPath = "")
         {
             if (Directory.Exists(folder))
                 Directory.Delete(folder, recursive: true);
@@ -37,6 +37,9 @@ namespace Viswright.Review
             string vmf = Path.Combine(folder, name + "_review.vmf");
             var slack = slackAfter ?? slackBefore;
             ReviewVmf.Build(working, numbered, samples, before, after, slack?.Values).Save(vmf);
+            // When the review VMF was written, so the next run can tell whether the mapper has edited it.
+            File.WriteAllText(Path.Combine(folder, RoundTrip.StampFile),
+                File.GetLastWriteTimeUtc(vmf).Ticks.ToString(CultureInfo.InvariantCulture));
 
             var space = BspSpace.Load((final ?? baseline).Bsp);
             var vis = BspVisibilityData.Load((final ?? baseline).Bsp);
@@ -44,7 +47,7 @@ namespace Viswright.Review
             var thumbs = WriteThumbnails(folder, space, samples, numbered, before, after);
 
             string page = Path.Combine(folder, "review.html");
-            File.WriteAllText(page, Page(name, vmf, numbered, plans, thumbs, after != null, before, after, samples, slackBefore, slackAfter));
+            File.WriteAllText(page, Page(name, vmf, decisionsPath, numbered, plans, thumbs, after != null, before, after, samples, slackBefore, slackAfter));
             return page;
         }
 
@@ -77,6 +80,14 @@ namespace Viswright.Review
                 Vector("mins", item.Mins);
                 Vector("maxs", item.Maxs);
                 if (cameras.TryGetValue(number, out int c)) json.WriteNumber("camera", c + 1);
+                if (item.Status == ItemStatus.Applied && item.NodeIds.Count > 0)
+                {
+                    json.WriteStartArray("nodes");
+                    foreach (long node in item.NodeIds) json.WriteNumberValue(node);
+                    json.WriteEndArray();
+                }
+                else
+                    json.WriteString("marker", $"vw_{number}_{item.Pass}");
                 json.WriteEndObject();
             }
             json.WriteEndArray();
@@ -159,7 +170,7 @@ namespace Viswright.Review
 
         private static string H(string? s) => WebUtility.HtmlEncode(s ?? "");
 
-        private static string Page(string name, string vmf, List<(int Number, ReviewItem Item)> items, List<Plan> plans,
+        private static string Page(string name, string vmf, string decisionsPath, List<(int Number, ReviewItem Item)> items, List<Plan> plans,
             Dictionary<int, string> thumbs, bool hasAfter, double[] before, double[]? after, SamplePoints samples, Slack? slackBefore, Slack? slackAfter)
         {
             var html = new StringBuilder();
@@ -192,6 +203,10 @@ namespace Viswright.Review
                 <p class="soft">Viswright review. Open <code>{{H(vmf)}}</code> in Hammer++: the <b>Viswright</b> visgroup holds every item below,
                 <b>Applied</b> shown and <b>Markers</b>, <b>Rejected</b> and <b>Heatmap</b> hidden until ticked, and the Camera tool steps through the
                 numbered items in order. Load the map's <code>.prt</code> (Map &gt; Load Portal File) to see its leaves.</p>
+                <p class="soft">To decide in Hammer: delete an applied change you do not want; move or resize a hint or areaportal brush to
+                where you want it; put a refused item's marker into <b>Viswright/Accept</b> to have it applied. Save the review VMF, then compile
+                with <b>Accept the review</b>: your edits are read, every item still waiting is accepted, and from then on compiles apply
+                exactly those items. The same decisions are in <code>{{H(decisionsPath)}}</code>, beside your map, to edit by hand.</p>
                 """);
 
             // Summary.

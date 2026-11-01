@@ -192,6 +192,39 @@ Against the hint search's results, the half of the squares with the most slack h
 the wrong way. Hints that helped did so by giving VVIS better portals, not by separating places that see
 different things.
 
+## Deciding, then compiling the same way every time
+
+A map's first compile with any pass ticked is a **review**: everything is searched and measured, the
+review above is written, and `<map>.viswright.json` appears beside the map with every item Viswright
+would apply, waiting for a decision. The compile itself uses the map as it is.
+
+Decide the items any of three ways:
+
+- edit `<map>.viswright.json`: set an item's `decision` to `accept` or `deny`;
+- in Hammer++, in the review VMF: delete an applied change you do not want, move or resize a hint or
+  areaportal brush to where you want it, or put a refused item's marker into **Viswright/Accept**, and
+  save;
+- tick **Accept the review** (`-accept`), which takes in your Hammer edits and then accepts every item
+  still waiting.
+
+Once nothing is waiting, compiles are **pinned**: the accepted items are put back exactly as decided,
+with no search, and checked by one VBSP compile - a leak, an areaportal that no longer divides two
+areas, a model VBSP refuses as a static prop, or changed collision takes the item out and says so,
+it is never forced in. The same map and the same decisions give the same copy every time, and a
+pinned compile costs one VBSP run on top of compiling without Viswright (the first compile of the map
+as it is is kept from the review while the map is unchanged). Items a later review no longer finds,
+because the map changed around them, are marked stale and left out until reviewed again.
+
+On rp_downtown_meowy with every pass: the review took about 7 minutes and left 251 items waiting; with
+them accepted, each pinned compile takes about 20 seconds and gives a byte-identical copy every time.
+
+Each pinned compile also writes `<map>_adopt.vmf` beside the copy: your map with the accepted changes
+in a **Viswright accepted** visgroup, to open in Hammer and save over your map if you want them to be
+your own. Viswright never writes your map.
+
+`-mode auto` searches and applies whatever proves itself on every compile, as before reviews existed;
+`-mode review` and `-mode pinned` force one or the other.
+
 ## How it runs
 
 1. Compile Pal runs `viswright optimize` before VBSP (order 0.8, after VMFFIX).
@@ -236,7 +269,8 @@ compile that would go over.
 ```
 viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N] [-areaportals]
                    [-detail] [-nodraw] [-fades [-fadepixels N]] [-slim [-luapath <folder>]...]
-                   [-hints [-hinttime M]] [-blocksize N] [-review] -vbsp <exe> -vvis <exe> -game <folder>
+                   [-hints [-hinttime M]] [-blocksize N] [-review] [-mode auto|review|pinned] [-accept]
+                   [-cpu] -vbsp <exe> -vvis <exe> -game <folder>
 viswright audit <map.vmf>
 viswright report <map.bsp>
 viswright diff <a.vmf> <b.vmf>

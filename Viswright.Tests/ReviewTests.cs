@@ -117,7 +117,7 @@ namespace Viswright.Tests
             var names = reread.Root.Nodes.Select(n => n.Name).ToList();
             Assert.True(names.IndexOf("visgroups") < names.IndexOf("world"));
             var viswright = reread.Root.Child("visgroups")!.Children("visgroup").Single(g => g.Get("name") == "Viswright");
-            Assert.Equal(["Applied", "Markers", "Rejected", "Suggested", "Heatmap"], viswright.Children("visgroup").Select(g => g.Get("name")));
+            Assert.Equal(["Applied", "Markers", "Rejected", "Suggested", "Heatmap", "Accept"], viswright.Children("visgroup").Select(g => g.Get("name")));
 
             // The prop keeps the visgroup it was in and joins the fades group.
             var prop = reread.Entities.Single(e => e.Classname == "prop_static");

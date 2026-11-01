@@ -54,6 +54,8 @@ namespace Viswright.Review
             var rejectedRoot = Group(root, "Rejected", Rejected);
             var suggestedRoot = Group(root, "Suggested", Suggested);
             var heatRoot = Group(root, "Heatmap", new Rgb(30, 140, 150));
+            // Empty: the mapper moves a refused item's marker into it to accept the item.
+            Group(root, "Accept", Applied);
             var groups = new Dictionary<string, VmfNode>();
             VmfNode Sub(VmfNode parent, string pass, Rgb colour)
             {
@@ -130,7 +132,7 @@ namespace Viswright.Review
         }
 
         /// <summary>Puts <paramref name="node"/> in <paramref name="group"/>, keeping any visgroups it is already in.</summary>
-        private static VmfNode Join(VmfNode node, VmfNode group, bool shown)
+        internal static VmfNode Join(VmfNode node, VmfNode group, bool shown)
         {
             var editor = node.Child("editor");
             if (editor == null)

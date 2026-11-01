@@ -50,6 +50,15 @@ namespace Viswright
         /// <summary>Write the review: a Hammer VMF of every item, pictures of the map, and a page listing them.</summary>
         public bool Review { get; init; }
 
+        /// <summary>
+        /// How the run goes. Null chooses as Compile Pal's default does: a review while the map has no
+        /// decisions file or items still waiting for one, pinned once they are all decided.
+        /// </summary>
+        public RunMode? Mode { get; init; } = RunMode.Auto;
+
+        /// <summary>Accept every item still waiting for a decision, then run pinned.</summary>
+        public bool Accept { get; init; }
+
         /// <summary>Cast the review's rays on the CPU even when there is a GPU.</summary>
         public bool Cpu { get; init; }
 
@@ -68,7 +77,7 @@ namespace Viswright
     /// expensive to draw is undone and reported; the map goes on without it. A run only fails - and
     /// stops the compile - when something is wrong with the map or the tool itself.
     /// </summary>
-    public static class Optimizer
+    public static partial class Optimizer
     {
         /// <summary>How much a pass may raise the triangles visible from a standing position and still be kept.</summary>
         public const double CostTolerance = 1.01;
@@ -99,9 +108,27 @@ namespace Viswright
             if (relocated > 0)
                 Log.Info($"{relocated} instance path(s) re-pointed so the copy finds the same files");
 
+            bool anyPass = options.Detail || options.Nodraw || options.Areaportals || options.Fades || options.Slim || options.Hints;
+            var decisions = DecisionFile.Load(DecisionFile.PathFor(source));
+            if (anyPass && options.Mode != RunMode.Auto)
+            {
+                int edited = RoundTrip.Apply(decisions, Path.Combine(Path.GetDirectoryName(copy)!, "review"));
+                if (edited > 0)
+                    Log.Info($"review: {edited} decision(s) taken from what you changed in the review VMF");
+                if (options.Accept && decisions.Exists)
+                    Log.Info($"review: {decisions.AcceptPending()} waiting item(s) accepted");
+                if (edited > 0 || (options.Accept && decisions.Exists))
+                    decisions.Save();
+            }
+            var mode = !anyPass ? RunMode.Auto
+                : options.Mode ?? (decisions.Exists && decisions.Pending == 0 ? RunMode.Pinned : RunMode.Review);
+
             int detailed = 0, nodrawn = 0, portals = 0;
-            if (options.Detail || options.Nodraw || options.Areaportals || options.Fades || options.Slim || options.Hints)
-                (detailed, nodrawn, portals) = RunPasses(options, working, copy, guard);
+            ReviewLog? found = null;
+            if (mode == RunMode.Pinned)
+                (detailed, nodrawn, portals) = RunPinned(options, working, copy, guard, decisions);
+            else if (anyPass)
+                (detailed, nodrawn, portals, found) = RunPasses(mode == RunMode.Review ? options with { Review = true } : options, working, copy, guard);
 
             var changes = VmfDiff.Compare(original, working);
             var undeclared = guard.Undeclared(changes);
@@ -111,6 +138,18 @@ namespace Viswright
                     + Environment.NewLine + string.Join(Environment.NewLine, undeclared.Take(20).Select(c => "  " + c)));
 
             Log.Check($"{changes.Count} change(s), all declared");
+
+            if (mode == RunMode.Review)
+            {
+                if (found != null)
+                {
+                    decisions.Merge(found.Items);
+                    decisions.Save();
+                }
+                Log.Out($"review: this compile uses the map as it is. {decisions.Pending} item(s) wait for a decision in {decisions.Path}: " +
+                    "set each to accept or deny there, or delete from the review VMF in Hammer what you do not want, then compile with Accept the review");
+                return new OptimizeResult(null, changes, detailed, nodrawn, portals);
+            }
 
             if (options.DryRun)
             {
@@ -130,7 +169,7 @@ namespace Viswright
         /// </summary>
         private const int CollisionMask = ~0x8000;
 
-        private static (int Detailed, int Nodrawn, int Portals) RunPasses(OptimizeOptions options, VmfDocument working, string copy, ChangeGuard guard)
+        private static (int Detailed, int Nodrawn, int Portals, ReviewLog? Found) RunPasses(OptimizeOptions options, VmfDocument working, string copy, ChangeGuard guard)
         {
             var tools = options.Tools ?? throw new ArgumentException("The passes need -vbsp, -vvis and -game to check their changes.");
             tools.Validate();
@@ -145,7 +184,7 @@ namespace Viswright
 
             var baseline = Baseline(working, copy, Path.Combine(work, "baseline"), name, tools);
             if (baseline == null)
-                return (0, 0, 0);
+                return (0, 0, 0, null);
 
             var baselineSpace = BspSpace.Load(baseline.Bsp);
             var reachable = SamplePoints.Reachable(working, SourceKit.Compile.PortalFile.Load(baseline.Prt), baselineSpace);
@@ -314,7 +353,7 @@ namespace Viswright
                 Log.Info($"slack: a standing point really sees {slackBefore.Seen.Where(v => v >= 0).Average():N0} triangles; " +
                     $"PVS slack {slackBefore.Average:P1} before" + (slackAfter != null ? $", {slackAfter.Average:P1} after" : "") + $" ({slackBefore.How})");
                 string page = ReviewOutput.Write(Path.Combine(Path.GetDirectoryName(copy)!, "review"), name, working, review, samples, baseline, lastVis,
-                    slackBefore, slackAfter);
+                    slackBefore, slackAfter, DecisionFile.PathFor(options.Source ?? options.Input));
                 Log.Out($"review: {review.Items.Count} item(s); open {page}");
                 Lap("review");
             }
@@ -322,7 +361,7 @@ namespace Viswright
             foreach (var (step, total, compiling, runs) in timings)
                 Log.Info($"time: {step} {total.TotalSeconds:0}s, of which {compiling.TotalSeconds:0}s in {runs} compiler run(s)");
 
-            return (detailed, nodrawn, portals);
+            return (detailed, nodrawn, portals, review);
         }
 
         private static void RunFades(OptimizeOptions options, VmfDocument working, WorkCompile reference, GameContent content,
@@ -406,11 +445,7 @@ namespace Viswright
             // VBSP refuses a static prop whose model was not built for it, and deletes the prop.
             var compile = WorkCompile.Prepare(working, copy, folder, name);
             var run = compile.RunVbsp(tools);
-            var refused = run.Output
-                .Where(l => l.Contains("staticprop", StringComparison.OrdinalIgnoreCase) || l.Contains("static prop", StringComparison.OrdinalIgnoreCase)
-                    || l.Contains("prop_static", StringComparison.OrdinalIgnoreCase))
-                .SelectMany(l => System.Text.RegularExpressions.Regex.Matches(l, @"models[/\\][^""\s!]+?\.mdl", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                .Select(m => m.Value.Replace('\\', '/').ToLowerInvariant()).ToHashSet();
+            var refused = RefusedModels(run);
             int back = refused.Count > 0 ? pass.RevertModels(refused) : 0;
             if (back > 0)
             {
@@ -520,6 +555,11 @@ namespace Viswright
         /// and VVIS has no more than 15%
         /// more portals to work through.
         /// </summary>
+        private static Dictionary<string, double> HintData(HintSquare square, double height) => new()
+        {
+            ["x"] = square.X, ["y"] = square.Y, ["floor"] = square.Floor, ["ceiling"] = square.Ceiling, ["height"] = height,
+        };
+
         /// <summary>How many hint heights compile at once.</summary>
         private const int HintLanes = 2;
 
@@ -558,7 +598,7 @@ namespace Viswright
                     {
                         var g = best[square];
                         review.Add(new ReviewItem(id, "hints", ItemStatus.Applied, $"a hint at z {placed.Height:0}: the points here see {g.Gain:P1} less", lo,
-                            new SourceKit.Geometry.Vec3(square.Maxs.X, square.Maxs.Y, placed.Height)) { Gain = g.Gain, NodeIds = [placed.Solid.Id ?? 0] });
+                            new SourceKit.Geometry.Vec3(square.Maxs.X, square.Maxs.Y, placed.Height)) { Gain = g.Gain, NodeIds = [placed.Solid.Id ?? 0], Data = HintData(square, placed.Height) });
                         continue;
                     }
                     var (height, gain) = best.TryGetValue(square, out var b) ? b : t;
@@ -566,7 +606,7 @@ namespace Viswright
                         : lostTogether.Contains(square) ? $"saw {gain:P1} less alone, but stopped helping alongside the other hints"
                         : $"its points saw at most {gain:P1} less with a hint (needs {HintGain:P0})";
                     review.Add(new ReviewItem(id, "hints", ItemStatus.Rejected, why, lo,
-                        new SourceKit.Geometry.Vec3(square.Maxs.X, square.Maxs.Y, height)) { Gain = gain });
+                        new SourceKit.Geometry.Vec3(square.Maxs.X, square.Maxs.Y, height)) { Gain = gain, Data = HintData(square, height) });
                 }
             }
             // A cached baseline has no timings; assume a minute a compile until one has been timed.
@@ -729,6 +769,13 @@ namespace Viswright
             return was <= 0 ? 0 : 1 - now / was;
         }
 
+        /// <summary>Models VBSP said it would not take as static props: it deletes such a prop with no more than a line.</summary>
+        private static HashSet<string> RefusedModels(CompileRun run) => run.Output
+            .Where(l => l.Contains("staticprop", StringComparison.OrdinalIgnoreCase) || l.Contains("static prop", StringComparison.OrdinalIgnoreCase)
+                || l.Contains("prop_static", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(l => System.Text.RegularExpressions.Regex.Matches(l, @"models[/\\][^""\s!]+?\.mdl", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            .Select(m => m.Value.Replace('\\', '/').ToLowerInvariant()).ToHashSet();
+
         /// <summary>Entities in a compiled map's entity lump, and props in its static prop lump.</summary>
         private static (int Entities, int StaticProps) EntityCounts(string bsp)
         {
@@ -778,7 +825,7 @@ namespace Viswright
             }
             foreach (var (doorway, door, reason) in pass.Dropped)
                 review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, reason, doorway.Mins, doorway.Maxs)
-                    { Detail = door.Classname });
+                    { Detail = door.Classname, Data = DecisionFile.DoorwayData(doorway) });
             foreach (var (portal, doorway, door, named) in pass.Added)
             {
                 string closes = doorway.Closes ? $"closes with {door.Get("targetname")}"
@@ -788,6 +835,7 @@ namespace Viswright
                 {
                     Detail = portal.Get("targetname"),
                     NodeIds = named ? [portal.Id ?? 0, door.Id ?? 0] : [portal.Id ?? 0],
+                    Data = DecisionFile.DoorwayData(doorway),
                 });
             }
             return added;

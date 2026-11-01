@@ -36,6 +36,9 @@ namespace Viswright
         public List<(VmfNode Solid, VmfBrush Brush, string Reason)> Returned { get; } = [];
         public long? EntityId => entity?.Id;
 
+        /// <summary>The func_detail entity the pass put its brushes in, while it has any.</summary>
+        public VmfNode? EntityNode => entity;
+
         /// <summary>
         /// The world brushes this pass may make detail, in file order. With <paramref name="compiled"/>,
         /// a compile of the same map, brushes that form the map's outer shell are left out: each

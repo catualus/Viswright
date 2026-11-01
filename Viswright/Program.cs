@@ -65,7 +65,7 @@ namespace Viswright
         private static int Optimize(string[] args)
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-review", "-cpu", "-vbsp", "-vvis", "-game" };
+                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-review", "-cpu", "-mode", "-accept", "-vbsp", "-vvis", "-game" };
             RefuseUnknownFlags(args, known);
 
             string input = Positional(args, 1) ?? throw new ArgumentException("optimize needs the VMF to read.");
@@ -101,6 +101,16 @@ namespace Viswright
                 Hints = HasFlag(args, "-hints"),
                 Review = HasFlag(args, "-review"),
                 Cpu = HasFlag(args, "-cpu"),
+                Accept = HasFlag(args, "-accept"),
+                Mode = TryGetFlagValue(args, "-mode", out string? mode)
+                    ? mode!.ToLowerInvariant() switch
+                    {
+                        "auto" => RunMode.Auto,
+                        "review" => RunMode.Review,
+                        "pinned" => RunMode.Pinned,
+                        _ => throw new ArgumentException($"-mode is auto, review or pinned, not '{mode}'."),
+                    }
+                    : null,
                 HintMinutes = TryGetFlagValue(args, "-hinttime", out string? minutes)
                     ? (double.TryParse(minutes, NumberStyles.Float, CultureInfo.InvariantCulture, out double m) && m > 0 && m <= 240 ? m
                         : throw new ArgumentException($"-hinttime needs a number of minutes from 1 to 240, not '{minutes}'."))
@@ -342,7 +352,7 @@ namespace Viswright
 
                   viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N]
                                      [-areaportals] [-detail] [-nodraw] [-fades [-fadepixels N]]
-                                     [-slim [-luapath <folder>]...] [-hints [-hinttime M]] [-blocksize N]
+                                     [-slim [-luapath <folder>]...] [-hints [-hinttime M]] [-blocksize N] [-mode auto|review|pinned] [-accept]
                                      -vbsp <exe> -vvis <exe> -game <folder>
                       Optimise a copy of the map and hand it to the rest of the compile. The map
                       itself is never written. -source names the map as queued when <map.vmf> is an
@@ -354,6 +364,13 @@ namespace Viswright
                       static props and func_detail, unless Lua looks their class up.
                       -hints tries hints over open ground at a few heights and keeps each only
                       where it lowers what is visible, searching for at most M minutes (15).
+                      With no -mode, a map's first run is a review: everything is searched and
+                      measured, a review and <map>.viswright.json are written beside it, and the
+                      compile uses the map as it is. Once every item is accepted or denied - in
+                      that file, or by editing the review VMF in Hammer, or with -accept, which
+                      accepts all still waiting - runs are pinned: the accepted items are applied
+                      with no search, checked by one compile. -mode auto searches and applies as
+                      before reviews existed.
                       -blocksize is the block size the real VBSP compile uses. -review writes a
                       review beside the copy: a Hammer VMF of every item, plans and a page,
                       with PVS slack measured by casting rays on the GPU (-cpu: on the CPU).
@@ -411,7 +428,7 @@ namespace Viswright
         }
 
         private static readonly HashSet<string> ValueFlags = new(StringComparer.OrdinalIgnoreCase)
-            { "-source", "-threads", "-vbsp", "-vvis", "-game", "-fadepixels", "-luapath", "-hinttime", "-blocksize", "-vmf", "-out", "-from" };
+            { "-source", "-threads", "-vbsp", "-vvis", "-game", "-fadepixels", "-luapath", "-hinttime", "-blocksize", "-vmf", "-out", "-from", "-mode" };
 
         private static List<string> AllFlagValues(string[] args, string flag)
         {

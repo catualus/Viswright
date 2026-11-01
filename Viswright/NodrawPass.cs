@@ -100,6 +100,22 @@ namespace Viswright
             centres.Clear();
         }
 
+        /// <summary>Gives back their material to the faces whose centre <paramref name="back"/> picks. Returns how many.</summary>
+        public int RevertWhere(Func<Vec3, bool> back)
+        {
+            int n = 0;
+            for (int i = changed.Count - 1; i >= 0; i--)
+            {
+                if (!back(centres[i]))
+                    continue;
+                changed[i].Side.Set("material", changed[i].Before);
+                changed.RemoveAt(i);
+                centres.RemoveAt(i);
+                n++;
+            }
+            return n;
+        }
+
         /// <summary>What the pass is allowed to have changed: the material of the sides it made nodraw.</summary>
         public void Declare(ChangeGuard guard)
         {

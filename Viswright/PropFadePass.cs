@@ -107,6 +107,19 @@ namespace Viswright
             Models.Clear();
         }
 
+        /// <summary>Takes the fade off the props <paramref name="back"/> picks. Returns how many.</summary>
+        public int RevertWhere(Func<VmfNode, bool> back)
+        {
+            var picked = changed.Where(c => back(c.Prop)).ToList();
+            foreach (var (prop, min, max) in picked)
+            {
+                Restore(prop, "fademindist", min);
+                Restore(prop, "fademaxdist", max);
+                changed.Remove((prop, min, max));
+            }
+            return picked.Count;
+        }
+
         private static void Restore(VmfNode node, string key, string? value)
         {
             if (value != null)

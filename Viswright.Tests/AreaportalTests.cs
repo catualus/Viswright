@@ -50,7 +50,7 @@ namespace Viswright.Tests
         /// func_door filling the doorway. <paramref name="window"/> also cuts an open hole in the wall,
         /// which joins the rooms into one area whatever the door does.
         /// </summary>
-        private static string TwoRooms(bool window = false)
+        internal static string TwoRooms(bool window = false)
         {
             var world = new StringBuilder();
             world.Append(Box(0, 0, 0, 512, 256, 16));        // floor
