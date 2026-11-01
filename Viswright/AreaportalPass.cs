@@ -246,6 +246,33 @@ namespace Viswright
             return path.Count <= 6 ? "the rooms meet another way close by (another doorway or gap)" : "the rooms meet a long way round, through other rooms";
         }
 
+        /// <summary>
+        /// The opening in the doorway's own wall that joins its rooms - the window, transom or gap beside
+        /// or above the door - as a box through the wall; null when the rooms meet some other way.
+        /// </summary>
+        public static (Vec3 Mins, Vec3 Maxs)? WallOpening(Doorway d, IReadOnlyList<Winding> path)
+        {
+            double wallLo = (double.IsNaN(d.WallA0) ? d.A0 : d.WallA0) - 2, wallHi = (double.IsNaN(d.WallA1) ? d.A1 : d.WallA1) + 2;
+            Vec3? lo = null, hi = null;
+            foreach (var w in path)
+            {
+                var c = w.Centre;
+                double a = d.NormalAxis == 0 ? c.X : c.Y, along = d.NormalAxis == 0 ? c.Y : c.X;
+                if (a < wallLo || a > wallHi || Math.Abs(along - (d.W0 + d.W1) / 2) >= 768 || c.Z <= d.Z0 - 64 || c.Z >= d.Z1 + 512)
+                    continue;
+                var wlo = w.Points.Aggregate(Vec3.Min);
+                var whi = w.Points.Aggregate(Vec3.Max);
+                lo = lo is { } l ? Vec3.Min(l, wlo) : wlo;
+                hi = hi is { } h ? Vec3.Max(h, whi) : whi;
+            }
+            if (lo is not { } min || hi is not { } max)
+                return null;
+            // Through the wall's thickness, as an areaportal window has to be.
+            return d.NormalAxis == 0
+                ? (min with { X = wallLo + 2 }, max with { X = wallHi - 2 })
+                : (min with { Y = wallLo + 2 }, max with { Y = wallHi - 2 });
+        }
+
         private static List<int> Path(List<(int Portal, int Cluster)>[] next, int from, int to)
         {
             var via = new Dictionary<int, (int Portal, int Cluster)> { [from] = (-1, -1) };

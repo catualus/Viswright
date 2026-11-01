@@ -243,6 +243,29 @@ this repository.
 The downtown maps differ from these where it matters: their streets are walled in up to the sky, so a
 cap over open ground has nothing to cut off, which is why the hint search finds so little there.
 
+## Hints the way Valve places them
+
+Drawn close up in 3D, most of Valve's vertical hints carry the end of a wall - a doorway's jamb, a
+building's corner, the mouth of a passage - straight across the open space beside it. VBSP already has
+that plane among its candidates, as the wall's end face; a hint makes it split there. **Hints over open
+ground** now tries those too, after the roof caps: every end of a world wall (a vertical face up to 64
+units wide) is carried along its own plane across the open space beside it until it meets solid again.
+They are measured in batches whose surrounding standing points do not overlap, two batches compiling at
+a time; one is kept if the points within 512 units of it see 2% less, and the set is kept if the whole map
+sees 1% less and VVIS takes at most two and a half times as long (or 30 seconds more). Over budget, the
+weakest half goes and the rest is compiled again. Both kinds of hint are now judged on VVIS time rather
+than on a portal count.
+
+Tested on Valve's maps with their hints taken out, then on the downtown maps:
+
+| Map | Valve's hints | Viswright's: caps | + wall ends | Total | VVIS |
+| --- | --- | --- | --- | --- | --- |
+| ctf_2fort | 16.3% less visible | 11.5% | 4.8% | 15.8% (97% of Valve's) | 5 s -> 13 s (Valve's: 10.9 s) |
+| cp_gravelpit | 19.2% | 9.3% | 3.5% | 12.4% (65%) | 3 s -> 21 s (Valve's: 7.5 s) |
+| rp_downtown_meowy | - | undone (0.9%) | 13.2% (433 kept) | 13.2% | 14 s -> 37 s |
+
+On meowy the search measured 60 of 240 batches of wall ends in its 20 minutes; more time finds more.
+
 ## Deciding, then compiling the same way every time
 
 A map's first compile with any pass ticked is a **review**: everything is searched and measured, the

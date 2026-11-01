@@ -54,6 +54,13 @@ namespace Viswright
         /// <summary>A compile already on disk, kept from an earlier run.</summary>
         public static WorkCompile Existing(string vmf) => new(vmf);
 
+        /// <summary>How long a compile kept from an earlier run took, for anything that compares times with it.</summary>
+        public void Remember(TimeSpan vbsp, TimeSpan vvis)
+        {
+            VbspRun ??= new CompileRun(0, [], vbsp);
+            VvisRun ??= new CompileRun(0, [], vvis);
+        }
+
         /// <summary>
         /// Writes <paramref name="map"/> (read from <paramref name="loadedFrom"/>) to
         /// <paramref name="folder"/> with its instance paths re-pointed, ready to compile.

@@ -89,12 +89,20 @@ namespace Viswright
 
             // Hints: a slab over each decided square at the decided height.
             HintPass? hintPass = null;
+            var wallSolids = new List<VmfNode>();
             if (options.Hints)
             {
                 hintPass = new HintPass(working);
                 foreach (var item in accepted.Where(i => i.Pass == "hints"))
                 {
                     var d = item.Data;
+                    if (d.ContainsKey("wallAxis"))
+                    {
+                        var solid = WallHints.Brush(WallHint.FromData(d), working.MaxId());
+                        working.World.Add(solid);
+                        wallSolids.Add(solid);
+                        continue;
+                    }
                     if (!d.ContainsKey("x") || !d.ContainsKey("height"))
                     {
                         left.Add((item.Id, "it has no square and height"));
@@ -199,7 +207,9 @@ namespace Viswright
             fadePass?.Declare(guard);
             slimPass?.Declare(guard);
 
-            int portals = portalPass?.Added.Count ?? 0, detailed = detailPass?.Moved.Count ?? 0, hints = hintPass?.Placed.Count ?? 0;
+            var wallPaths = wallSolids.Select(s => $"world#{working.World.Id}/solid#{s.Id}").ToHashSet();
+            guard.Allow("hints", change => change.Kind == VmfChangeKind.Added && wallPaths.Contains(change.Path));
+            int portals = portalPass?.Added.Count ?? 0, detailed = detailPass?.Moved.Count ?? 0, hints = (hintPass?.Placed.Count ?? 0) + wallSolids.Count;
             int nodrawn = nodrawPass?.Changed.Count ?? 0, faded = fadePass?.Changed.Count ?? 0, slimmed = slimPass?.Converted.Count ?? 0;
             Log.Check($"pinned: applied {portals} areaportal(s), {detailed} detail brush(es), {hints} hint(s), {nodrawn} nodraw face(s), " +
                 $"{faded} fade(s), {slimmed} entit(ies) made static");
@@ -215,6 +225,7 @@ namespace Viswright
                 (portalPass?.Added.SelectMany(a => a.NamedDoor ? new[] { a.Portal, a.Door } : [a.Portal]) ?? [])
                     .Concat(detailPass?.EntityNode is { } detailEntity ? [detailEntity] : [])
                     .Concat(hintPass?.Placed.Values.Select(p => p.Solid) ?? [])
+                    .Concat(wallSolids)
                     .Concat(fadePass?.Changed.Select(c => c.Prop) ?? [])
                     .Concat(slimPass?.Converted.Select(c => c.Entity) ?? []));
             return (detailed, nodrawn, portals);
@@ -224,6 +235,8 @@ namespace Viswright
                 portalPass?.RevertAll();
                 detailPass?.RevertAll();
                 hintPass?.RevertAll();
+                foreach (var s in wallSolids) working.World.Remove(s);
+                wallSolids.Clear();
                 nodrawPass?.RevertAll();
                 fadePass?.RevertAll();
                 slimPass?.RevertAll();

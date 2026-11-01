@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -65,6 +66,40 @@ namespace Viswright.Tests
 
             pass.RevertAll();
             Assert.Empty(VmfDiff.Compare(before, map));
+        }
+
+        [Fact]
+        public void AWallEndHintHasItsHintFaceOnThePlane()
+        {
+            var hint = new WallHint(1, 600, 516, 1008, 16, 400, []);
+            var brush = VmfBrush.Build(WallHints.Brush(hint, 100))!;
+            var face = brush.Faces.Single(f => f.Material == HintPass.HintMaterial);
+            Assert.Equal(1, Math.Abs(face.Plane.Normal.Y), 3);
+            Assert.Equal(600, face.Winding!.Centre.Y, 3);
+            Assert.All(brush.Faces.Where(f => f != face), f => Assert.Equal(HintPass.SkipMaterial, f.Material));
+            Assert.Equal(hint with { Points = [] }, WallHint.FromData(hint.Data) with { Points = [] });
+        }
+
+        [Fact]
+        public void AWallEndingInTheCourtyardIsCarriedAcrossIt()
+        {
+            if (AreaportalTests.Tools() is not { } tools)
+                return;
+            using var space = new Workspace();
+            // A wall from the south side to y = 600, leaving a gap to the north wall.
+            string text = Courtyard();
+            text = text.Insert(text.IndexOf("}\r\nentity", StringComparison.Ordinal), AreaportalTests.Box(500, 16, 16, 516, 600, 1008));
+            string vmf = space.Write("maps/courtyard.vmf", text);
+            var map = VmfDocument.Load(vmf);
+            var compile = WorkCompile.Prepare(map, vmf, Path.Combine(space.Root, "c"), "courtyard");
+            Assert.True(compile.RunVbsp(tools).Succeeded);
+            var bsp = BspSpace.Load(compile.Bsp);
+            var samples = SamplePoints.Find(bsp, SamplePoints.Reachable(map, SourceKit.Compile.PortalFile.Load(compile.Prt), bsp));
+
+            var found = WallHints.Find(map, bsp, samples);
+            // The wall's end at y = 600, carried west to x = 16 and east to x = 1008.
+            Assert.Contains(found, h => h.Axis == 1 && Math.Abs(h.At - 600) < 1 && h.From < 40 && h.To > 495 && h.To < 505);
+            Assert.Contains(found, h => h.Axis == 1 && Math.Abs(h.At - 600) < 1 && h.From > 510 && h.To > 990);
         }
 
         [Fact]

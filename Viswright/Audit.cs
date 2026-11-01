@@ -103,7 +103,7 @@ namespace Viswright
             return findings;
         }
 
-        private static readonly HashSet<string> NonVisibleTools = new(StringComparer.OrdinalIgnoreCase)
+        internal static readonly HashSet<string> NonVisibleTools = new(StringComparer.OrdinalIgnoreCase)
         {
             "TOOLS/TOOLSHINT", "TOOLS/TOOLSSKIP", "TOOLS/TOOLSAREAPORTAL", "TOOLS/TOOLSOCCLUDER", "TOOLS/TOOLSCLIP",
             "TOOLS/TOOLSPLAYERCLIP", "TOOLS/TOOLSNPCCLIP", "TOOLS/TOOLSTRIGGER", "TOOLS/TOOLSSKYBOX", "TOOLS/TOOLSSKYBOX2D",

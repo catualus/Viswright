@@ -290,6 +290,13 @@ namespace Viswright
                     // Hint planes split faces: what nodraw is checked against has to include them.
                     current = CompileMeasure.Of(kept, samples);
                 }
+                // Then the hints Valve's own maps are made of: the ends of walls carried across open space.
+                if (RunWallHints(options, working, copy, Path.Combine(work, "hints"), name, tools, collision, samples, guard, review, lastVis,
+                    TimeSpan.FromMinutes(options.HintMinutes)) is { } walls)
+                {
+                    lastVis = latest = walls;
+                    current = CompileMeasure.Of(walls, samples);
+                }
                 Lap("hints");
             }
 
@@ -724,7 +731,8 @@ namespace Viswright
             if (reason == null && after != null)
                 reason = after.SampledTriangles > before.SampledTriangles * (1 - HintMapGain)
                         ? $"the map as a whole sees under {HintMapGain:P0} less: {after.SampledTriangles:N0} triangles from a standing position against {before.SampledTriangles:N0}"
-                    : after.Portals > before.Portals * 1.15 ? $"VVIS would have {after.Portals:N0} portals to work through against {before.Portals:N0}"
+                    : after.VvisTime > TimeSpan.FromTicks(Math.Max((long)(before.VvisTime.Ticks * MaxVvisGrowth), (before.VvisTime + TimeSpan.FromSeconds(30)).Ticks))
+                        ? $"VVIS would take {after.VvisTime.TotalSeconds:0}s against {before.VvisTime.TotalSeconds:0}s"
                     : after.Faces >= 65536 * 85 / 100 || after.LeafFaces >= 65536 * 85 / 100 ? "the map would be within 15% of the face or leaf face limit"
                     : null;
             if (reason != null)
@@ -817,6 +825,7 @@ namespace Viswright
 
             static string DoorKey(VmfNode door) => door.Get("targetname") is { Length: > 0 } n && !n.StartsWith(AreaportalPass.DoorNamePrefix, StringComparison.Ordinal)
                 ? n : "door@" + ReviewLog.Anchor(ReviewLog.Bounds(door).Mins);
+            int windows = 0;
             foreach (var (door, reason) in pass.SkippedDoors)
             {
                 var joined = pass.JoinedBy.FirstOrDefault(kv => ReferenceEquals(kv.Key.Door, door));
@@ -824,12 +833,24 @@ namespace Viswright
                 {
                     review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, AreaportalPass.LeakKind(d, joined.Value), d.Mins, d.Maxs)
                         { Detail = door.Classname, Data = DecisionFile.DoorwayData(d), Leak = joined.Value });
+                    // A window or gap in the door's own wall: a func_areaportalwindow in it, fading shut at a
+                    // distance, would let a portal in the door divide the rooms. It changes how the window
+                    // looks from afar, so it is suggested for the mapper, never applied.
+                    if (AreaportalPass.WallOpening(d, joined.Value) is var (wlo, whi))
+                    {
+                        windows++;
+                        review.Add(new ReviewItem("window:" + DoorKey(door), "areaportals", ItemStatus.Suggested,
+                            "a func_areaportalwindow in this opening, fading shut at a distance with a stand-in brush, would let an areaportal in the door beside it divide the two rooms",
+                            wlo, whi) { Detail = door.Get("targetname") ?? door.Classname, Leak = joined.Value });
+                    }
                     continue;
                 }
                 var (lo, hi) = ReviewLog.Bounds(door);
                 review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, reason, lo, hi)
                     { Detail = door.Classname });
             }
+            if (windows > 0)
+                Log.Info($"areaportals: {windows} doorway(s) could divide two areas if the window or gap in the same wall had an areaportal window; suggested in the review");
             foreach (var (doorway, door, reason) in pass.Dropped)
                 review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, reason, doorway.Mins, doorway.Maxs)
                     { Detail = door.Classname, Data = DecisionFile.DoorwayData(doorway) });
@@ -1031,10 +1052,16 @@ namespace Viswright
             string key = BaselineKey(working, tools);
             string keyFile = Path.Combine(folder, "key.txt");
             string bsp = Path.Combine(folder, name + ".bsp");
+            string timingFile = Path.Combine(folder, "timing.txt");
             if (File.Exists(keyFile) && File.Exists(bsp) && File.ReadAllText(keyFile) == key)
             {
                 Log.Info("baseline: reusing the compile from last time, nothing it depends on has changed");
-                return WorkCompile.Existing(Path.Combine(folder, name + ".vmf"));
+                var kept = WorkCompile.Existing(Path.Combine(folder, name + ".vmf"));
+                // Its times, for the hint searches' VVIS budget.
+                if (File.Exists(timingFile) && File.ReadAllText(timingFile).Split(' ') is [var v1, var v2]
+                    && long.TryParse(v1, out long vbspTicks) && long.TryParse(v2, out long vvisTicks))
+                    kept.Remember(TimeSpan.FromTicks(vbspTicks), TimeSpan.FromTicks(vvisTicks));
+                return kept;
             }
 
             var baseline = WorkCompile.Prepare(working, copy, folder, name);
@@ -1053,6 +1080,7 @@ namespace Viswright
                 return null;
             }
             File.WriteAllText(keyFile, key);
+            File.WriteAllText(timingFile, $"{baseline.VbspRun!.Elapsed.Ticks} {baseline.VvisRun!.Elapsed.Ticks}");
             return baseline;
         }
 
