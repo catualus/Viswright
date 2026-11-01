@@ -1,0 +1,8 @@
+[
+  {
+    "Name": "Thread limit",
+    "Parameter": " -threads",
+    "CanHaveValue": true,
+    "Description": "Limit how many CPU cores the report uses. Leave this off to use all of them."
+  }
+]

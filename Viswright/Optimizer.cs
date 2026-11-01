@@ -43,6 +43,11 @@ namespace Viswright
             var working = VmfDocument.Load(input);
             SourceKitConcurrency.ThrowIfCancelled();
 
+            var findings = Audit.Run(original);
+            Audit.Print(findings);
+            if (findings.Any(f => f.Level == FindingLevel.Error))
+                throw new InvalidOperationException("The map has a problem that stops it loading in game; see above.");
+
             string copy = Handoff.CopyPath(source);
             var guard = ChangeGuard.ForRelocation();
 

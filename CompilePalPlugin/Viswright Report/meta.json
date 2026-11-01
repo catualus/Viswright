@@ -1,0 +1,16 @@
+{
+  "Name": "Viswright Report",
+  "Description": "Measures the compiled map's visibility after VVIS: how many clusters and triangles each part of the map can see, the worst places, and how close the map is to Garry's Mod's areaportal ceiling and the BSP's face limits. Reads the BSP and changes nothing.",
+  "Warning": "Uses viswright.exe from the Viswright plugin folder, which has to be installed beside this one. Stops the compile if an areaportal is numbered past what Garry's Mod loads.",
+  "Path": "Plugins\\Viswright\\viswright.exe",
+  "Arguments": "report $bsp$",
+  "BasisString": "",
+  "Order": 2.5,
+  "DoRun": false,
+  "ReadOutput": true,
+  "CheckExitCode": true,
+  "SupportsBSP": true,
+  "CompatibleGames": [
+    4000
+  ]
+}

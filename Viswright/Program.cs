@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -37,6 +38,8 @@ namespace Viswright
                 return args[0].ToLowerInvariant() switch
                 {
                     "optimize" => Optimize(args),
+                    "audit" => AuditCommand(args),
+                    "report" => Report(args),
                     "diff" => Diff(args),
                     "status" => Status(args),
                     "help" or "-help" or "--help" or "/?" => Usage(),
@@ -78,6 +81,40 @@ namespace Viswright
             return 0;
         }
 
+        private static int AuditCommand(string[] args)
+        {
+            RefuseUnknownFlags(args, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "-threads" });
+            string map = Positional(args, 1) ?? throw new ArgumentException("audit needs the VMF to read.");
+            var findings = Audit.Run(VmfDocument.Load(map));
+            Audit.Print(findings);
+            return findings.Any(f => f.Level == FindingLevel.Error) ? 1 : 0;
+        }
+
+        /// <summary>
+        /// Measures a compiled map's visibility. Runs after VVIS, so it sees the visibility the map will
+        /// ship with. An areaportal numbered past what Garry's Mod loads is an error here, because the
+        /// map it describes will not load.
+        /// </summary>
+        private static int Report(string[] args)
+        {
+            RefuseUnknownFlags(args, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "-threads" });
+            string bsp = Positional(args, 1) ?? throw new ArgumentException("report needs the BSP to read.");
+            if (!File.Exists(bsp))
+                throw new FileNotFoundException($"The BSP {bsp} does not exist. Run VBSP and VVIS first.", bsp);
+
+            Log.Vmf(Path.GetFileName(bsp));
+            var report = VisReport.Build(BspVisibilityData.Load(bsp));
+            foreach (string line in report.Lines())
+                Log.Check(line);
+
+            if (report.HighestPortalNumber > VisReport.GmodMaxPortalNumber)
+            {
+                Log.Error($"an areaportal is numbered {report.HighestPortalNumber}; Garry's Mod refuses to load a map with one above {VisReport.GmodMaxPortalNumber}");
+                return 1;
+            }
+            return 0;
+        }
+
         private static int Diff(string[] args)
         {
             string a = Positional(args, 1) ?? throw new ArgumentException("diff needs two VMFs.");
@@ -99,19 +136,75 @@ namespace Viswright
             Log.Sink = _ => { };
             bool enabled = Environment.GetEnvironmentVariable("COMPILE_PAL_STEP_ENABLED") != "false";
 
+            // The areaportal budget is the one thing worth saying before a compile: a map past it will
+            // not load, and nothing in the compile itself says so. Counted by scanning lines rather
+            // than parsing, because this runs for every queued map in front of someone waiting.
+            int? portals = null;
+            string? map = Positional(args, 1);
+            if (map != null && File.Exists(map))
+            {
+                try
+                {
+                    portals = CountTopLevelPortals(map);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+
+            string label = portals is { } p ? $"Viswright · {p}/{Audit.PortalBudget} portals" : "Viswright";
+            string detail = !enabled
+                ? "Viswright is not ticked for this map."
+                : portals > Audit.PortalBudget
+                    ? $"The map has {portals} areaportals and areaportal windows. Garry's Mod refuses to load a map with more than {Audit.PortalBudget}, so the compile would stop."
+                    : "No optimisation passes yet: the map is audited, copied and compiled as it is.";
+            string severity = portals > Audit.PortalBudget ? (enabled ? "blocking" : "warn")
+                : portals > Audit.PortalBudget - 20 ? "warn" : "info";
+
             using var buffer = new MemoryStream();
             using (var json = new Utf8JsonWriter(buffer))
             {
                 json.WriteStartObject();
-                json.WriteString("label", "Viswright");
-                json.WriteString("detail", enabled
-                    ? "No optimisation passes yet: the map is copied and compiled as it is."
-                    : "Viswright is not ticked for this map.");
-                json.WriteString("severity", "info");
+                json.WriteString("label", label);
+                json.WriteString("detail", detail);
+                json.WriteString("severity", severity);
                 json.WriteEndObject();
             }
             Console.Out.WriteLine(Encoding.UTF8.GetString(buffer.ToArray()));
             return 0;
+        }
+
+        /// <summary>
+        /// Areaportal entities VBSP will compile: only those in a top-level entity block. Hammer writes
+        /// an object hidden with Ctrl+H inside a "hidden" block, which VBSP does not read at all, so a
+        /// plain text search over-counts any map with hidden portals.
+        /// </summary>
+        internal static int CountTopLevelPortals(string map)
+        {
+            int count = 0, depth = 0;
+            bool inEntity = false;
+            string? pending = null;
+            foreach (string raw in File.ReadLines(map))
+            {
+                string line = raw.Trim();
+                if (line == "{")
+                {
+                    if (depth == 0)
+                        inEntity = string.Equals(pending, "entity", StringComparison.OrdinalIgnoreCase);
+                    depth++;
+                }
+                else if (line == "}")
+                    depth--;
+                else if (line.StartsWith('"'))
+                {
+                    if (inEntity && depth == 1
+                        && (line.Equals("\"classname\" \"func_areaportal\"", StringComparison.OrdinalIgnoreCase)
+                            || line.Equals("\"classname\" \"func_areaportalwindow\"", StringComparison.OrdinalIgnoreCase)))
+                        count++;
+                }
+                else if (line.Length > 0)
+                    pending = line;
+            }
+            return count;
         }
 
         private static int Usage()
@@ -123,6 +216,13 @@ namespace Viswright
                       Optimise a copy of the map and hand it to the rest of the compile. The map
                       itself is never written. -source names the map as queued when <map.vmf> is an
                       earlier step's copy; -dryrun reports without handing anything on.
+
+                  viswright audit <map.vmf>
+                      Report what could be optimised, changing nothing.
+
+                  viswright report <map.bsp>
+                      Measure a compiled map's visibility: clusters and triangles each cluster
+                      can see, and areaportal and lump limits. Run after VVIS.
 
                   viswright diff <a.vmf> <b.vmf>
                       List what differs between two maps, block by block.

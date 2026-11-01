@@ -108,6 +108,16 @@ Copy-Item (Join-Path $source 'parameters.json') $out
 Copy-Item (Join-Path $root 'LICENSE') $out
 Copy-Item (Join-Path $source 'README.md') $out -ErrorAction SilentlyContinue
 
+# The report is a second compile step, after VVIS, that runs the same executable. It is its own
+# plugin folder because a step is a folder, and it holds only its step definition: its meta.json
+# points at Plugins\Viswrightiswright.exe.
+$reportSource = Join-Path $root 'CompilePalPlugin/Viswright Report'
+$reportOut = Join-Path $root 'artifacts/Viswright Report'
+if (Test-Path $reportOut) { Get-ChildItem $reportOut -Force | Remove-Item -Recurse -Force }
+New-Item -ItemType Directory -Path $reportOut -Force | Out-Null
+Copy-Item (Join-Path $reportSource 'meta.json') $reportOut
+Copy-Item (Join-Path $reportSource 'parameters.json') $reportOut
+
 $size = (Get-ChildItem $out -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
 
 Write-Host ''
@@ -120,10 +130,10 @@ if ($Zip) {
 
     # Compressing the folder itself, not its contents, so the zip contains a Viswright/ directory -
     # extracting it straight into Plugins/ then lands in the right place.
-    Compress-Archive -Path $out -DestinationPath $archive
+    Compress-Archive -Path $out, $reportOut -DestinationPath $archive
     Write-Host "Archive written to $archive" -ForegroundColor Green
 }
 
 Write-Host ''
-Write-Host 'To install: copy the Viswright folder into your Compile Pal "Plugins" directory,'
+Write-Host 'To install: copy the Viswright and Viswright Report folders into your Compile Pal "Plugins" directory,'
 Write-Host 'then restart Compile Pal and add the Viswright step to a preset.'
