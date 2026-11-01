@@ -1,0 +1,13 @@
+[
+  {
+    "Name": "Report only",
+    "Parameter": " -dryrun",
+    "Description": "Work out and report every change, but compile the map as it is."
+  },
+  {
+    "Name": "Thread limit",
+    "Parameter": " -threads",
+    "CanHaveValue": true,
+    "Description": "Limit how many CPU cores Viswright uses. Leave this off to use all of them."
+  }
+]
