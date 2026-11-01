@@ -151,7 +151,8 @@ namespace Viswright
                 catch (UnauthorizedAccessException) { }
             }
 
-            string label = portals is { } p ? $"Viswright · {p}/{Audit.PortalBudget} portals" : "Viswright";
+            // Compile Pal shows the step name in front of the label, so the label is only what follows it.
+            string label = portals is { } p ? $"{p}/{Audit.PortalBudget} areaportals" : "ready";
             string detail = !enabled
                 ? "Viswright is not ticked for this map."
                 : portals > Audit.PortalBudget
