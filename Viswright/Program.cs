@@ -41,6 +41,7 @@ namespace Viswright
                     "audit" => AuditCommand(args),
                     "report" => Report(args),
                     "diff" => Diff(args),
+                    "collision" => CollisionCommand(args),
                     "status" => Status(args),
                     "help" or "-help" or "--help" or "/?" => Usage(),
                     _ => Unknown(args[0]),
@@ -61,17 +62,26 @@ namespace Viswright
 
         private static int Optimize(string[] args)
         {
-            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "-source", "-threads", "-dryrun" };
+            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-vbsp", "-vvis", "-game" };
             RefuseUnknownFlags(args, known);
 
             string input = Positional(args, 1) ?? throw new ArgumentException("optimize needs the VMF to read.");
             TryGetFlagValue(args, "-source", out string? source);
+
+            Toolchain? tools = null;
+            if (TryGetFlagValue(args, "-vbsp", out string? vbsp) && TryGetFlagValue(args, "-vvis", out string? vvis)
+                && TryGetFlagValue(args, "-game", out string? game))
+                tools = new Toolchain(vbsp!, vvis!, game!);
 
             var result = Optimizer.Run(new OptimizeOptions
             {
                 Input = input,
                 Source = source,
                 DryRun = HasFlag(args, "-dryrun"),
+                Detail = HasFlag(args, "-detail"),
+                Nodraw = HasFlag(args, "-nodraw"),
+                Tools = tools,
             });
 
             // Last, and only once everything above has succeeded: from this line on, Compile Pal
@@ -112,6 +122,21 @@ namespace Viswright
                 Log.Error($"an areaportal is numbered {report.HighestPortalNumber}; Garry's Mod refuses to load a map with one above {VisReport.GmodMaxPortalNumber}");
                 return 1;
             }
+            return 0;
+        }
+
+        /// <summary>Lists the collision brushes two compiles do not share; for finding out why a pass was undone.</summary>
+        private static int CollisionCommand(string[] args)
+        {
+            string a = Positional(args, 1) ?? throw new ArgumentException("collision needs two BSPs.");
+            string b = Positional(args, 2) ?? throw new ArgumentException("collision needs two BSPs.");
+            var left = BspSpace.Load(a).CollisionShapes(-1);
+            var right = BspSpace.Load(b).CollisionShapes(-1);
+            Console.Out.WriteLine($"{left.Count:N0} and {right.Count:N0} brushes; {BspSpace.CollisionDifferences(left, right)} without a counterpart");
+            foreach (var s in left.Where(x => BspSpace.CollisionDifferences([x], right) == right.Count + 1).Take(10))
+                Console.Out.WriteLine($"  only in the first: contents {s.Contents:X} ({s.Mins}) - ({s.Maxs}) volume {s.Volume:0.#}");
+            foreach (var s in right.Where(x => BspSpace.CollisionDifferences([x], left) == left.Count + 1).Take(10))
+                Console.Out.WriteLine($"  only in the second: contents {s.Contents:X} ({s.Mins}) - ({s.Maxs}) volume {s.Volume:0.#}");
             return 0;
         }
 
@@ -214,9 +239,14 @@ namespace Viswright
                 viswright - automatic visibility optimisation for Source maps
 
                   viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N]
+                                     [-detail] [-nodraw] -vbsp <exe> -vvis <exe> -game <folder>
                       Optimise a copy of the map and hand it to the rest of the compile. The map
                       itself is never written. -source names the map as queued when <map.vmf> is an
                       earlier step's copy; -dryrun reports without handing anything on.
+                      -detail makes small and complex world brushes func_detail; -nodraw makes
+                      faces hidden against opaque brushes nodraw. Both are checked by compiling
+                      with the compilers named, and undone if the map leaks, its collision
+                      changes, or more becomes visible.
 
                   viswright audit <map.vmf>
                       Report what could be optimised, changing nothing.
@@ -261,8 +291,10 @@ namespace Viswright
             return null;
         }
 
-        private static bool TakesValue(string flag) =>
-            flag.Equals("-source", StringComparison.OrdinalIgnoreCase) || flag.Equals("-threads", StringComparison.OrdinalIgnoreCase);
+        private static readonly HashSet<string> ValueFlags = new(StringComparer.OrdinalIgnoreCase)
+            { "-source", "-threads", "-vbsp", "-vvis", "-game" };
+
+        private static bool TakesValue(string flag) => ValueFlags.Contains(flag);
 
         private static bool HasFlag(string[] args, string flag) =>
             Array.Exists(args, a => a.Equals(flag, StringComparison.OrdinalIgnoreCase));

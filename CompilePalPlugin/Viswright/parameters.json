@@ -1,5 +1,15 @@
 [
   {
+    "Name": "Make detail",
+    "Parameter": " -detail",
+    "Description": "Turn small and complex world brushes - trim, railings, pillars, stairs, frames - into func_detail, so they stop cutting the map into extra pieces for VVIS. Brushes that form the outside of the map, frame an areaportal, are water or are in a visgroup named viswright_ignore are never touched. Any brush a leak runs through goes back to being world, and the whole pass is undone if collision changes or more becomes visible."
+  },
+  {
+    "Name": "Hide covered faces",
+    "Parameter": " -nodraw",
+    "Description": "Make faces nodraw when they are pressed flat against an opaque solid brush and so can never be seen - mainly world faces behind func_detail, which VBSP does not remove itself. Saves faces and lightmap space. A face is only changed when all of it is proven covered."
+  },
+  {
     "Name": "Report only",
     "Parameter": " -dryrun",
     "Description": "Work out and report every change, but compile the map as it is."

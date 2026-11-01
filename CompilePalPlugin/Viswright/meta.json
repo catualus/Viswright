@@ -1,10 +1,10 @@
 {
   "Name": "Viswright",
-  "Description": "Optimises a copy of the map for visibility before VBSP compiles it, checks every change against the real compilers, and backs out anything that does not help. Your VMF is never changed. In this early build no optimisation passes exist yet: the step copies the map and VBSP compiles the copy.",
-  "Warning": "Needs the Compile Pal fork from the version that lets a step hand VBSP a different VMF. A failed check stops the compile.",
+  "Description": "Optimises a copy of the map before VBSP compiles it, checks every change by compiling it with your VBSP and VVIS, and backs out anything that leaks, changes collision or makes more visible. Your VMF is never changed. Tick the passes you want in this step's options; with none ticked it audits the map and compiles it as it is.",
+  "Warning": "Needs the Compile Pal fork from the version that lets a step hand VBSP a different VMF. The passes compile the map a few extra times, a minute or two on a large map, less when the map is unchanged since the last run. A failed check stops the compile.",
   "Path": "Plugins\\Viswright\\viswright.exe",
   "Arguments": "optimize $vmfFile$",
-  "BasisString": " -source $sourceVmf$",
+  "BasisString": " -source $sourceVmf$ -vbsp $vbsp$ -vvis $vvis$ -game $game$",
   "Order": 0.8,
   "DoRun": false,
   "ReadOutput": true,

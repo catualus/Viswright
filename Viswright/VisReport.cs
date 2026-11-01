@@ -43,6 +43,9 @@ namespace Viswright
         /// <summary>The clusters that see the most triangles, worst first.</summary>
         public IReadOnlyList<ClusterCost> Worst { get; }
 
+        /// <summary>Every cluster's cost, indexed by cluster number.</summary>
+        public IReadOnlyList<ClusterCost> Costs { get; }
+
         public int AreaCount { get; }
         public int AreaPortalEntities { get; }
         public int HighestPortalNumber { get; }
@@ -62,6 +65,7 @@ namespace Viswright
 
             // Ties broken by cluster number, so the list is the same on every run.
             Worst = costs.OrderByDescending(c => c.Triangles).ThenBy(c => c.Cluster).Take(10).ToList();
+            Costs = costs;
 
             AreaCount = bsp.AreaCount;
             AreaPortalEntities = bsp.AreaPortalEntityCount;
