@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- A library, not an executable. Compile Pal publishes self-contained and cannot reference a
+         non-self-contained exe, so the command line lives in ViswrightCli and links this. Named
+         .Core because NuGet compares project names case-insensitively, and a library called
+         "viswright" would clash with the "viswright" executable. -->
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Viswright.Core</AssemblyName>
+    <RootNamespace>Viswright</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- The map, BSP and compile-output readers live in SourceKit, shared with Meshwright and Compile
+         Pal, and checked out as a submodule. Set SourceKitRoot to build against another copy. -->
+    <SourceKitRoot Condition="'$(SourceKitRoot)' == ''">$(MSBuildThisFileDirectory)..\external\SourceKit\</SourceKitRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(SourceKitRoot)SourceKit\SourceKit.csproj" />
+    <Using Include="SourceKit" />
+    <InternalsVisibleTo Include="Viswright.Tests" />
+  </ItemGroup>
+
+</Project>

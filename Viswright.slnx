@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Viswright.Tests/Viswright.Tests.csproj" />
+  <Project Path="Viswright/Viswright.csproj" />
+  <Project Path="ViswrightCli/ViswrightCli.csproj" />
+</Solution>
