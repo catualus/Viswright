@@ -30,21 +30,27 @@ namespace Viswright
         public static LuaGuard Scan(IEnumerable<string> folders)
         {
             var guard = new LuaGuard();
-            foreach (string folder in folders.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+            var files = folders.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase)
+                .SelectMany(folder => Directory.EnumerateFiles(folder, "*.lua", SearchOption.AllDirectories))
+                .Take(50000).ToList();
+            guard.FilesScanned = files.Count;
+
+            // Reading sixteen thousand small files one after another leaves the cores waiting on the
+            // disk; read them at once, and keep for each class the first file in folder order.
+            var found = new List<string>[files.Count];
+            System.Threading.Tasks.Parallel.For(0, files.Count, SourceKitConcurrency.Options, i =>
             {
-                foreach (string file in Directory.EnumerateFiles(folder, "*.lua", SearchOption.AllDirectories))
-                {
-                    if (guard.FilesScanned >= 50000)
-                        return guard;
-                    guard.FilesScanned++;
-                    string text;
-                    try { text = File.ReadAllText(file); }
-                    catch (IOException) { continue; }
-                    catch (UnauthorizedAccessException) { continue; }
-                    foreach (Match m in ClassLookup.Matches(text))
-                        guard.Classes.TryAdd(m.Groups[1].Value, file);
-                }
-            }
+                string text;
+                try { text = File.ReadAllText(files[i]); }
+                catch (IOException) { return; }
+                catch (UnauthorizedAccessException) { return; }
+                var classes = ClassLookup.Matches(text).Select(m => m.Groups[1].Value).ToList();
+                if (classes.Count > 0)
+                    found[i] = classes;
+            });
+            for (int i = 0; i < files.Count; i++)
+                foreach (string cls in found[i] ?? [])
+                    guard.Classes.TryAdd(cls, files[i]);
             return guard;
         }
 

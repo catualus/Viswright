@@ -24,7 +24,7 @@ namespace Viswright
         private static readonly string[] SeeThroughKeys = ["$translucent", "$alphatest", "$additive", "$vertexalpha", "$distancealpha"];
 
         private readonly Func<string, byte[]?> read;
-        private readonly Dictionary<string, bool> cache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> cache = new(StringComparer.OrdinalIgnoreCase);
 
         /// <param name="read">Reads a file by its game path, such as "materials/brick/wall01.vmt", or returns null.</param>
         public MaterialOpacity(Func<string, byte[]?> read) => this.read = read;
@@ -32,11 +32,7 @@ namespace Viswright
         /// <summary>Whether a brush face with <paramref name="material"/> (as a VMF names it) is opaque.</summary>
         public bool IsOpaque(string material)
         {
-            if (cache.TryGetValue(material, out bool known))
-                return known;
-            bool opaque = Decide(material, depth: 0);
-            cache[material] = opaque;
-            return opaque;
+            return cache.GetOrAdd(material, m => Decide(m, depth: 0));
         }
 
         private bool Decide(string material, int depth)

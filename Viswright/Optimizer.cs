@@ -135,6 +135,10 @@ namespace Viswright
             string name = Path.GetFileNameWithoutExtension(copy);
             string work = Path.Combine(Path.GetDirectoryName(copy)!, "work");
             var setup = System.Diagnostics.Stopwatch.StartNew();
+            // Reading the game's Lua needs nothing from a compile; it runs while the baseline compiles.
+            var luaScan = options.Slim
+                ? System.Threading.Tasks.Task.Run(() => LuaGuard.Scan(LuaGuard.GameFolders(tools.GameFolder).Concat(options.LuaPaths)))
+                : null;
 
             var baseline = Baseline(working, copy, Path.Combine(work, "baseline"), name, tools);
             if (baseline == null)
@@ -169,13 +173,17 @@ namespace Viswright
             // Before detail, so the detail pass sees the new portals and leaves their frames as world.
             // Each pass is judged against the map as the passes before it left it.
             WorkCompile reference = baseline;
+            // The newest VBSP and VVIS compile of the map as it stands, and the newest VBSP compile: a later
+            // step that needs one uses it rather than compiling the same map again.
+            WorkCompile lastVis = baseline;
+            WorkCompile latest = baseline;
             if (options.Areaportals)
             {
                 portals = RunAreaportals(working, copy, Path.Combine(work, "areaportals"), name, tools, baseline, samples, collision, content, guard,
                     review, out var portalCompile);
                 if (portalCompile is { VvisRun.Succeeded: true })
                 {
-                    reference = portalCompile;
+                    reference = lastVis = latest = portalCompile;
                     current = CompileMeasure.Of(portalCompile, samples);
                 }
                 Lap("areaportals");
@@ -210,6 +218,7 @@ namespace Viswright
                         detailed = pass.Moved.Count;
                         pass.Declare(guard);
                         current = after;
+                        lastVis = latest = compile;
                         Log.Check($"detail: {detailed} brush(es) made func_detail; after: {after.Describe()}");
                     }
                 }
@@ -227,6 +236,19 @@ namespace Viswright
                         { NodeIds = [solid.Id ?? 0] });
                 }
                 Lap("detail");
+            }
+
+            // Hints change only how the map is split, and are judged on what is visible; the passes after
+            // them change neither, so the compile detail left is the one to measure against.
+            if (options.Hints)
+            {
+                if (RunHints(options, working, copy, Path.Combine(work, "hints"), name, tools, collision, samples, guard, review, lastVis) is { } kept)
+                {
+                    lastVis = latest = kept;
+                    // Hint planes split faces: what nodraw is checked against has to include them.
+                    current = CompileMeasure.Of(kept, samples);
+                }
+                Lap("hints");
             }
 
             if (options.Nodraw)
@@ -256,6 +278,7 @@ namespace Viswright
                     {
                         nodrawn = found;
                         pass.Declare(guard);
+                        latest = compile;
                         int faces = BspVisibilityData.Load(compile.Bsp).Faces.Count;
                         Log.Check($"nodraw: {found} hidden face(s) made nodraw; faces {current.Faces:N0} -> {faces:N0}");
                         foreach (var (side, centre) in pass.Changed.Zip(pass.Centres).Take(5))
@@ -274,23 +297,15 @@ namespace Viswright
             }
             if (options.Slim)
             {
-                RunSlimming(options, working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard, review);
+                RunSlimming(working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard, review, latest, luaScan!.Result);
                 Lap("slim");
-            }
-            // Last: it is measured against the map with every other change made.
-            if (options.Hints)
-            {
-                RunHints(options, working, copy, Path.Combine(work, "hints"), name, tools, collision, samples, guard, review);
-                Lap("hints");
             }
 
             if (options.Review)
             {
-                // What the map sees with every change kept, for the heatmap and its difference.
-                var final = Compile(working, copy, Path.Combine(work, "review"), name, tools);
-                if (final == null)
-                    Log.Warn("review: the optimised map did not compile cleanly, so the review has no after picture");
-                string page = ReviewOutput.Write(Path.Combine(Path.GetDirectoryName(copy)!, "review"), name, working, review, samples, baseline, final);
+                // What the map sees with every change kept: the passes after the last visibility compile
+                // (nodraw, fades, entities) change no leaf and no PVS, so that compile shows it.
+                string page = ReviewOutput.Write(Path.Combine(Path.GetDirectoryName(copy)!, "review"), name, working, review, samples, baseline, lastVis);
                 Log.Out($"review: {review.Items.Count} item(s); open {page}");
                 Lap("review");
             }
@@ -337,8 +352,8 @@ namespace Viswright
             }
         }
 
-        private static void RunSlimming(OptimizeOptions options, VmfDocument working, string copy, string folder, string name,
-            Toolchain tools, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard, ReviewLog review)
+        private static void RunSlimming(VmfDocument working, string copy, string folder, string name,
+            Toolchain tools, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard, ReviewLog review, WorkCompile latest, LuaGuard lua)
         {
             void Report(SlimmingPass pass, string? undone)
             {
@@ -357,7 +372,6 @@ namespace Viswright
                 }
             }
 
-            var lua = LuaGuard.Scan(LuaGuard.GameFolders(tools.GameFolder).Concat(options.LuaPaths));
             Log.Info($"slim: {lua.FilesScanned:N0} Lua file(s) scanned; {lua.Classes.Count} class(es) looked up by class name");
 
             var pass = new SlimmingPass();
@@ -375,18 +389,10 @@ namespace Viswright
                 return;
             }
 
-            // The map as the passes before this one left it, to count against.
-            pass.RevertAll();
-            var before = WorkCompile.Prepare(working, copy, folder + "-before", name);
-            if (!before.RunVbsp(tools).Succeeded || before.Leaked)
-            {
-                Report(pass, null);
-                Log.Warn("slim: skipped, the map does not compile cleanly before it");
-                return;
-            }
-            var countsBefore = EntityCounts(before.Bsp);
-            pass = new SlimmingPass();
-            count = pass.Apply(working, content, lua);
+            // The map as the passes before this one left it, to count against: the newest compile is it,
+            // as far as entities and static props go - fades, the only pass that may run between, changes
+            // neither count.
+            var countsBefore = EntityCounts(latest.Bsp);
 
             // VBSP refuses a static prop whose model was not built for it, and deletes the prop.
             var compile = WorkCompile.Prepare(working, copy, folder, name);
@@ -505,30 +511,27 @@ namespace Viswright
         /// and VVIS has no more than 15%
         /// more portals to work through.
         /// </summary>
-        private static void RunHints(OptimizeOptions options, VmfDocument working, string copy, string folder, string name, Toolchain tools,
-            List<BspSpace.BrushShape> collision, SamplePoints samples, ChangeGuard guard, ReviewLog review)
+        /// <summary>How many hint heights compile at once.</summary>
+        private const int HintLanes = 2;
+
+        private static WorkCompile? RunHints(OptimizeOptions options, VmfDocument working, string copy, string folder, string name, Toolchain tools,
+            List<BspSpace.BrushShape> collision, SamplePoints samples, ChangeGuard guard, ReviewLog review, WorkCompile reference)
         {
             string vvis = Path.GetFileName(tools.Vvis);
             if (!vvis.Contains("++", StringComparison.Ordinal) && !vvis.Contains("plusplus", StringComparison.OrdinalIgnoreCase))
             {
                 Log.Warn("hints: skipped, the search compiles the map several times and needs VVIS++ to do it in reasonable time");
-                return;
+                return null;
             }
             var budget = TimeSpan.FromMinutes(options.HintMinutes);
             var clock = System.Diagnostics.Stopwatch.StartNew();
 
-            var reference = WorkCompile.Prepare(working, copy, folder + "-reference", name);
-            if (!reference.RunVbsp(tools).Succeeded || reference.Leaked || !reference.RunVvis(tools).Succeeded)
-            {
-                Log.Warn("hints: skipped, the map does not compile cleanly before them");
-                return;
-            }
             var before = CompileMeasure.Of(reference, samples);
             var referenceCost = CompileMeasure.PerPoint(reference, samples);
             var squares = HintPass.Squares(samples, BspSpace.Load(reference.Bsp), _ => false);
             Log.Info($"hints: {squares.Count} square(s) of open ground to try, {budget.TotalMinutes:0} minute(s) to search");
             if (squares.Count == 0)
-                return;
+                return null;
 
             var pass = new HintPass(working);
             var best = new Dictionary<HintSquare, (double Height, double Gain)>();
@@ -557,29 +560,68 @@ namespace Viswright
                         new SourceKit.Geometry.Vec3(square.Maxs.X, square.Maxs.Y, height)) { Gain = gain });
                 }
             }
-            TimeSpan slowest = reference.VbspRun!.Elapsed + reference.VvisRun!.Elapsed;
+            // A cached baseline has no timings; assume a minute a compile until one has been timed.
+            TimeSpan slowest = reference.VbspRun is { } rv && reference.VvisRun is { } rvv ? rv.Elapsed + rvv.Elapsed : TimeSpan.FromMinutes(1);
+
+            // Every height is its own map: written out first, then compiled two at a time, so one
+            // compile's single-threaded VBSP stages run beside the other's VVIS.
+            var rounds = new List<(List<(HintSquare Square, double Height)> Tries, WorkCompile Compile)>();
             for (int round = 0; ; round++)
             {
                 var tries = squares.Select(s => (Square: s, Height: s.Heights().Skip(round).FirstOrDefault(double.NaN)))
                     .Where(t => !double.IsNaN(t.Height)).ToList();
                 if (tries.Count == 0)
                     break;
-                // Leave time for the compile that proves the squares chosen.
-                if (clock.Elapsed + slowest * 2 > budget)
-                {
-                    Log.Info($"hints: time is up after {round} height(s)");
-                    break;
-                }
                 foreach (var (square, height) in tries)
                     pass.Place(square, height);
-                var compile = Compile(working, copy, folder, name, tools);
+                rounds.Add((tries, WorkCompile.Prepare(working, copy, $"{folder}-{round + 1}", name)));
                 pass.RevertAll();
+            }
+            var compiled = new WorkCompile?[rounds.Count];
+            int started = 0;
+            using (var lanes = new System.Threading.SemaphoreSlim(HintLanes))
+            {
+                var running = new List<System.Threading.Tasks.Task>();
+                for (int round = 0; round < rounds.Count; round++)
+                {
+                    lanes.Wait();
+                    // Leave time for the compile that proves the squares chosen.
+                    if (clock.Elapsed + slowest * 2 > budget)
+                    {
+                        lanes.Release();
+                        Log.Info($"hints: time is up after {round} height(s)");
+                        break;
+                    }
+                    int r = round;
+                    started++;
+                    running.Add(System.Threading.Tasks.Task.Run(() =>
+                    {
+                        try
+                        {
+                            var c = rounds[r].Compile;
+                            if (c.RunVbsp(tools).Succeeded && !c.Leaked && c.RunVvis(tools).Succeeded)
+                            {
+                                compiled[r] = c;
+                                long took = (c.VbspRun!.Elapsed + c.VvisRun!.Elapsed).Ticks;
+                                lock (compiled)
+                                    slowest = TimeSpan.FromTicks(Math.Max(slowest.Ticks, took / HintLanes));
+                            }
+                        }
+                        finally { lanes.Release(); }
+                    }));
+                }
+                System.Threading.Tasks.Task.WaitAll(running.ToArray());
+            }
+            SourceKitConcurrency.ThrowIfCancelled();
+
+            for (int round = 0; round < started; round++)
+            {
+                var (tries, compile) = (rounds[round].Tries, compiled[round]);
                 if (compile == null)
                 {
                     Log.Warn($"hints: height {round + 1} did not compile cleanly; skipped");
                     continue;
                 }
-                slowest = TimeSpan.FromTicks(Math.Max(slowest.Ticks, (compile.VbspRun!.Elapsed + compile.VvisRun!.Elapsed).Ticks));
                 var cost = CompileMeasure.PerPoint(compile, samples);
                 int better = 0;
                 foreach (var (square, height) in tries)
@@ -600,7 +642,7 @@ namespace Viswright
             {
                 Report(null);
                 Log.Check("hints: none kept, no square saw less with a hint");
-                return;
+                return null;
             }
 
             // Together, hints can undo each other; drop any square that stops helping and try again.
@@ -641,7 +683,7 @@ namespace Viswright
                 Report(reason);
                 pass.RevertAll();
                 Log.Warn($"hints: undone, {reason}");
-                return;
+                return null;
             }
 
             pass.Declare(guard);
@@ -652,6 +694,7 @@ namespace Viswright
             Log.Check($"hints: {pass.Placed.Count} kept; triangles visible from a standing position {before.SampledTriangles:N0} -> {after!.SampledTriangles:N0} " +
                 $"({1 - after.SampledTriangles / before.SampledTriangles:P1} less), portals {before.Portals:N0} -> {after.Portals:N0}, " +
                 $"vvis {before.VvisTime.TotalSeconds:0}s -> {after.VvisTime.TotalSeconds:0}s; list in {list}");
+            return final;
         }
 
         /// <summary>A VBSP and VVIS compile of the map as it stands, or null if either failed or it leaked.</summary>

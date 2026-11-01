@@ -30,9 +30,13 @@ namespace Viswright
         /// <summary>Points a player can stand at; with <paramref name="reachable"/>, only those in clusters it accepts.</summary>
         public static SamplePoints Find(BspSpace space, Func<int, bool>? reachable = null)
         {
-            var points = new List<Vec3>();
-            for (double x = Math.Floor(space.Mins.X / Spacing) * Spacing + Spacing / 2; x < space.Maxs.X; x += Spacing)
+            double x0 = Math.Floor(space.Mins.X / Spacing) * Spacing + Spacing / 2;
+            int columns = Math.Max(0, (int)Math.Ceiling((space.Maxs.X - x0) / Spacing));
+            var perColumn = new List<Vec3>[columns];
+            System.Threading.Tasks.Parallel.For(0, columns, SourceKitConcurrency.Options, column =>
             {
+                double x = x0 + column * Spacing;
+                var points = perColumn[column] = [];
                 for (double y = Math.Floor(space.Mins.Y / Spacing) * Spacing + Spacing / 2; y < space.Maxs.Y; y += Spacing)
                 {
                     bool aboveWasOpen = false;
@@ -50,8 +54,8 @@ namespace Viswright
                         aboveWasOpen = !solid;
                     }
                 }
-            }
-            return new SamplePoints(points);
+            });
+            return new SamplePoints(perColumn.SelectMany(c => c).ToList());
         }
 
         /// <summary>Entities a player starts at or is sent to.</summary>

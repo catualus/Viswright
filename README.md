@@ -146,6 +146,11 @@ not pay on either map: about 15 of 120 squares see 2% less on their own, but tog
 1%. The streets are walled in up to the sky, so there is little over the rooftops for a hint to cut
 off, and VVIS++'s leaves are already tight.
 
+A full run on rp_downtown_meowy with every pass, hints and the review takes about 8 minutes (it took 11
+before compiles were reused and Viswright's own work was spread over the cores); about nine tenths of it
+is VBSP and VVIS. Each step logs its time and how much of it was compiling. Hint heights compile two at
+a time, which finishes two compiles in 50 seconds rather than 60.
+
 In Garry's Mod, the optimised prominence loads with all 191 portal numbers in use. At a storefront door
 given a portal, wireframe rendering shows nothing behind the shut door and the whole plaza once it opens.
 

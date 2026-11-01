@@ -87,13 +87,22 @@ namespace Viswright
                 .Where(b => b.Faces.All(f => f.Material.StartsWith("TOOLS/TOOLSNODRAW", StringComparison.OrdinalIgnoreCase) || content.Opacity.IsOpaque(f.Material)))
                 .ToList();
 
-            var found = new List<Doorway>();
-            foreach (var door in map.Entities.Where(e => Audit.DoorClasses.Contains(e.Classname ?? "", StringComparer.OrdinalIgnoreCase)))
+            var doors = map.Entities.Where(e => Audit.DoorClasses.Contains(e.Classname ?? "", StringComparer.OrdinalIgnoreCase))
+                .Where(door => !(door.Get("targetname") is { Length: > 0 } name && portalTargets.Contains(name))).ToList();
+            // Finding a door's opening reads nothing but the compiled map and the game's files, so the
+            // doors are worked on at once; what follows compares them with each other, in map order.
+            var openings = new (Doorway? Doorway, string? Reason, string? OpenOnly)[doors.Count];
+            System.Threading.Tasks.Parallel.For(0, doors.Count, SourceKitConcurrency.Options, i =>
             {
-                if (door.Get("targetname") is { Length: > 0 } name && portalTargets.Contains(name))
-                    continue;
+                var d = Find(doors[i], compiled, content, frames, out string? why, out string? only);
+                openings[i] = (d, why, only);
+            });
 
-                var doorway = Find(door, compiled, content, frames, out string? reason, out string? openOnly);
+            var found = new List<Doorway>();
+            for (int i = 0; i < doors.Count; i++)
+            {
+                var door = doors[i];
+                var (doorway, reason, openOnly) = openings[i];
                 if (openOnly != null)
                 {
                     OpenOnly[openOnly] = OpenOnly.GetValueOrDefault(openOnly) + 1;
