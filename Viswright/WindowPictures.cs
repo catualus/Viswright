@@ -26,7 +26,9 @@ namespace Viswright
     /// its faces look one way, into the box, so it is only seen from the viewer's side. Each face
     /// stands a few units beyond the wall it copies, cut into cells, and a cell is kept only where a
     /// real wall stands behind it; a side open to a street is left out. The face the room is seen
-    /// through carries what is in the opening itself - glass, bars, a frame - cut out elsewhere.
+    /// through carries what is solid in the opening itself - bars, a frame - and is cut out elsewhere;
+    /// the opening's glass is drawn into the room's pictures as a tint, since a translucent stand-in
+    /// keeps its window from shutting.
     /// Only one side of a window gets a shell, the room more closed in; a window whose room cannot
     /// be traced, or whose back wall is mostly open, gets one flat picture on each side instead.
     ///
@@ -46,7 +48,7 @@ namespace Viswright
         public sealed record Brush(Vec3 Lo, Vec3 Hi, int Face, string Material, (string U, string V) Axes);
 
         private sealed record BakeEntry(string Material, Vec3 Eye, Vec3 ClipNormal, double ClipDistance, bool Square = false,
-            double? FarDistance = null, bool Alpha = false, IReadOnlyList<(int Axis, double At)>? Skip = null, bool Translucent = false);
+            double? FarDistance = null, bool Alpha = false, IReadOnlyList<(int Axis, double At)>? Skip = null, bool Opening = false);
 
         /// <summary>A world triangle lying flat on an axis plane: the plane, the way it faces, its area and extent.</summary>
         private readonly record struct Flat(int Axis, int Sign, double At, double Area, Vec3 Min, Vec3 Max);
@@ -372,8 +374,9 @@ namespace Viswright
 
         /// <summary>
         /// The material and texture axes for the face of the stand-in <paramref name="lo"/>..<paramref name="hi"/>
-        /// on the viewer's side of a window with a room shell: what is in the opening itself - glass,
-        /// bars, a frame - square on and see-through elsewhere, since it is part of the room shut away.
+        /// on the viewer's side of a window with a room shell: what is solid in the opening itself - bars,
+        /// a frame - square on and cut out elsewhere. BAKE also reads the opening's glass from it, and
+        /// tints the room's pictures with it.
         /// </summary>
         public (string Material, (string U, string V) Axes) Front(Window window, Vec3 lo, Vec3 hi, bool high)
         {
@@ -386,7 +389,7 @@ namespace Viswright
             var normal = a == 0 ? new Vec3(r, 0, 0) : new Vec3(0, r, 0);
             // from the viewer's face of the wall to a unit past its other face
             double near = r > 0 ? window.Mins[a] : -window.Maxs[a], beyond = r > 0 ? window.Maxs[a] + 1 : -(window.Mins[a] - 1);
-            entries.Add(new BakeEntry(name, window.Centre - normal * 1500, normal, near, Square: true, FarDistance: beyond, Translucent: true));
+            entries.Add(new BakeEntry(name, window.Centre - normal * 1500, normal, near, Square: true, FarDistance: beyond, Alpha: true, Opening: true));
             return (name, axes);
         }
 
@@ -445,9 +448,8 @@ namespace Viswright
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllBytes(path + ".vtf", PlaceholderVtf(w, h));
             // a slice is cut out where nothing is; its placeholder is all cut out
-            // what is in a window's opening is translucent by degrees, as glass is
-            string alpha = name.EndsWith("_front", StringComparison.Ordinal) ? "\t\"$translucent\" \"1\"\r\n"
-                : name.Contains("_slice", StringComparison.Ordinal) || name.Contains("_card", StringComparison.Ordinal) ? "\t\"$alphatest\" \"1\"\r\n" : "";
+            string alpha = name.Contains("_slice", StringComparison.Ordinal) || name.Contains("_card", StringComparison.Ordinal)
+                || name.EndsWith("_front", StringComparison.Ordinal) ? "\t\"$alphatest\" \"1\"\r\n" : "";
             File.WriteAllText(path + ".vmt", "\"UnlitGeneric\"\r\n{\r\n\t\"$basetexture\" \"" + name + "\"\r\n" + alpha + "\t\"%keywords\" \"viswright\"\r\n}\r\n");
         }
 
@@ -479,9 +481,9 @@ namespace Viswright
                     json.WriteNumber("far", farDistance);
                 if (e.Alpha)
                     json.WriteBoolean("alpha", true);
-                // see-through by degrees, glass and all
-                if (e.Translucent)
-                    json.WriteBoolean("translucent", true);
+                // a window's opening, whose glass tints the pictures of the room behind it
+                if (e.Opening)
+                    json.WriteBoolean("opening", true);
                 // planes a card shows, left out of this picture
                 if (e.Skip is { Count: > 0 } skip)
                 {

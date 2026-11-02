@@ -46,7 +46,7 @@ namespace Viswright.Tests
                 Assert.StartsWith("[0 0 -1 ", axes.V);
                 string vmt = File.ReadAllText(Path.Combine(game, "materials", name + ".vmt"));
                 Assert.Contains("\"UnlitGeneric\"", vmt);
-                Assert.Contains("\"$translucent\" \"1\"", vmt);
+                Assert.Contains("\"$alphatest\" \"1\"", vmt);
                 // 64 by 32 units at a texel a unit
                 var vtf = File.ReadAllBytes(Path.Combine(game, "materials", name + ".vtf"));
                 Assert.Equal(64, BitConverter.ToUInt16(vtf, 16));
@@ -56,7 +56,8 @@ namespace Viswright.Tests
                 var face = Assert.Single(bake.RootElement.GetProperty("faces").EnumerateArray());
                 Assert.Equal(name, face.GetProperty("material").GetString());
                 Assert.True(face.GetProperty("square").GetBoolean());
-                Assert.True(face.GetProperty("translucent").GetBoolean());
+                Assert.True(face.GetProperty("alpha").GetBoolean());
+                Assert.True(face.GetProperty("opening").GetBoolean());
                 // seen looking along +x: from the wall's near face to a unit past its far face
                 var clip = face.GetProperty("clip").EnumerateArray().Select(e => e.GetDouble()).ToArray();
                 Assert.Equal([1, 0, 0, 248], clip);
@@ -131,10 +132,11 @@ namespace Viswright.Tests
                 var slice = Assert.Single(materials, m => m!.EndsWith("_slice0"));
                 var skip = faces[slice!].GetProperty("skip").EnumerateArray().Select(p => (p[0].GetInt32(), p[1].GetDouble())).ToList();
                 Assert.Contains((2, 136.0), skip);
-                // the opening's glass is kept as glass
+                // the opening is cut out, nothing in the stand-in translucent: that would keep the window open
                 string front = materials.Single(m => m!.EndsWith("_front"))!;
-                Assert.True(faces[front].GetProperty("translucent").GetBoolean());
-                Assert.Contains("$translucent", File.ReadAllText(Path.Combine(tools.GameFolder, "materials", front + ".vmt")));
+                Assert.True(faces[front].GetProperty("opening").GetBoolean());
+                Assert.All(materials.Where(m => m!.StartsWith("viswright/")).Distinct(),
+                    m => Assert.DoesNotContain("$translucent", File.ReadAllText(Path.Combine(tools.GameFolder, "materials", m + ".vmt"))));
             }
             finally
             {
@@ -178,10 +180,10 @@ namespace Viswright.Tests
                 }
                 foreach (var (name, face) in faces)
                 {
-                    bool cut = name.Contains("_slice") || name.Contains("_card");
+                    bool cut = name.Contains("_slice") || name.Contains("_card") || name.EndsWith("_front");
                     Assert.Equal(cut, face.TryGetProperty("alpha", out var alpha) && alpha.GetBoolean());
-                    Assert.Equal(cut || name.EndsWith("_front"), face.TryGetProperty("far", out _));
-                    Assert.Equal(name.EndsWith("_front"), face.TryGetProperty("translucent", out _));
+                    Assert.Equal(cut, face.TryGetProperty("far", out _));
+                    Assert.Equal(name.EndsWith("_front"), face.TryGetProperty("opening", out _));
                 }
             }
             finally
