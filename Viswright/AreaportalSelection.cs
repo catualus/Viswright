@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using SourceKit;
 using SourceKit.Vmf;
 
 namespace Viswright
@@ -8,18 +9,19 @@ namespace Viswright
     /// <summary>
     /// Which of the portals a compile placed are worth keeping.
     ///
-    /// A shut door hides everything its portal cuts off: when removing the portal from the map's area
-    /// graph splits it in two, a player on one side stops drawing the other. The value of a portal is
-    /// that, averaged over everywhere a player can stand - the triangles of the far side, weighted by how
-    /// much of the map is on the near side, both ways round. Portals between the same two areas (double
-    /// doors, two doors into one shop) only cut anything together, so they are valued and kept as a
-    /// group.
+    /// A portal is worth what the engine stops drawing because of it (see <see cref="PortalCulling"/>):
+    /// with every door shut, how many more triangles a player draws on average, everywhere they can
+    /// stand, once the portal is taken out. Portals that only cut anything together are valued and kept
+    /// as a group: doors between the same two areas (double doors, two doors into one shop), and a door
+    /// with the windows and other doorways its rooms only divide with.
     /// </summary>
     public static class AreaportalSelection
     {
-        public sealed record Group(IReadOnlyList<VmfNode> Portals, double Benefit)
+        public sealed record Group(IReadOnlyList<VmfNode> Portals, IReadOnlyList<Window> Windows, double Benefit)
         {
-            public double BenefitPerSlot => Benefit / Portals.Count;
+            public Group(IReadOnlyList<VmfNode> portals, double benefit) : this(portals, [], benefit) { }
+
+            public double BenefitPerSlot => Benefit / (Portals.Count + Windows.Count);
         }
 
         /// <summary>The portals of <paramref name="pass"/> that VBSP did not manage to place between two areas.</summary>
@@ -37,11 +39,89 @@ namespace Viswright
             return invalid;
         }
 
+        /// <summary>The window portals of <paramref name="pass"/> that VBSP did not manage to place between two areas.</summary>
+        public static List<Window> InvalidWindows(AreaportalPass pass, BspVisibilityData compiled) =>
+            pass.AddedWindows.Where(a => !compiled.PortalNumbersByName.TryGetValue(a.Portal.Get("targetname")!, out int key)
+                || !compiled.AreaPortalLinks.TryGetValue(key, out var link) || link.AreaA == link.AreaB).Select(a => a.Window).ToList();
+
         /// <summary>
-        /// Values each group of portals that close with doors, best value per portal first. Portals that
-        /// never close are given no value: they are kept only if there is room.
+        /// Values the portals of <paramref name="pass"/> in groups, best value per portal first, by what
+        /// <paramref name="culling"/> says taking each group out would cost.
         /// </summary>
-        public static List<Group> Rank(AreaportalPass pass, BspVisibilityData compiled, BspSpace space, SamplePoints samples)
+        public static List<Group> Rank(AreaportalPass pass, BspVisibilityData compiled, PortalCulling culling)
+        {
+            int Key(VmfNode portal) => compiled.PortalNumbersByName.GetValueOrDefault(portal.Get("targetname")!, -1);
+            var doorPortal = pass.Added.ToDictionary(a => a.Doorway, a => a.Portal);
+            var windowPortal = pass.AddedWindows.ToDictionary(a => a.Window, a => a.Portal);
+
+            // Doors between the same two areas start out together; a door that needs another doorway
+            // closed joins that doorway's group.
+            var placed = pass.Added.Where(a => Key(a.Portal) is var k && k >= 0 && compiled.AreaPortalLinks.ContainsKey(k)).ToList();
+            var parent = placed.ToDictionary(a => a.Doorway, a => a.Doorway);
+            Doorway Find(Doorway d) { while (parent[d] != d) d = parent[d] = parent[parent[d]]; return d; }
+            void Join(Doorway a, Doorway b) { var ra = Find(a); var rb = Find(b); if (ra != rb) parent[ra] = rb; }
+            foreach (var pair in placed.GroupBy(a => compiled.AreaPortalLinks[Key(a.Portal)] is var (x, y) ? (Math.Min(x, y), Math.Max(x, y)) : default))
+            {
+                var first = pair.First().Doorway;
+                foreach (var a in pair.Skip(1)) Join(a.Doorway, first);
+            }
+            foreach (var (d, rescue) in pass.Rescued)
+                foreach (var need in rescue.Doorways)
+                    if (parent.ContainsKey(d) && parent.ContainsKey(need))
+                        Join(d, need);
+
+            var groups = new List<Group>();
+            foreach (var members in placed.GroupBy(a => Find(a.Doorway)))
+            {
+                var portals = members.Select(a => a.Portal).ToList();
+                var windows = members.SelectMany(a => pass.Rescued.TryGetValue(a.Doorway, out var r) ? r.Windows : [])
+                    .Where(windowPortal.ContainsKey).Distinct().ToList();
+                var keys = portals.Select(Key).Concat(windows.Select(w => Key(windowPortal[w]))).Where(k => k >= 0).ToHashSet();
+                groups.Add(new Group(portals, windows, culling.Value(keys)));
+            }
+
+            // Best value per portal first; ties by the first portal's id, so the order is the same every run.
+            return groups.OrderByDescending(g => g.BenefitPerSlot).ThenBy(g => g.Portals[0].Id).ToList();
+        }
+
+        /// <summary>
+        /// The doors and windows to keep within <paramref name="slots"/>: groups with any value, taking
+        /// each time the one worth most for the portals it still needs - a window another group already
+        /// kept costs nothing more.
+        /// </summary>
+        public static (HashSet<VmfNode> Doors, HashSet<Window> Windows) Choose(IReadOnlyList<Group> ranked, int slots)
+        {
+            var doors = new HashSet<VmfNode>();
+            var windows = new HashSet<Window>();
+            var left = ranked.Where(g => g.Benefit > 0).ToList();
+            while (left.Count > 0)
+            {
+                Group? best = null;
+                double bestValue = 0;
+                foreach (var g in left)
+                {
+                    int cost = g.Portals.Count(p => !doors.Contains(p)) + g.Windows.Count(w => !windows.Contains(w));
+                    if (doors.Count + windows.Count + cost > slots)
+                        continue;
+                    double value = cost == 0 ? double.MaxValue : g.Benefit / cost;
+                    if (best == null || value > bestValue)
+                        (best, bestValue) = (g, value);
+                }
+                if (best == null)
+                    break;
+                doors.UnionWith(best.Portals);
+                windows.UnionWith(best.Windows);
+                left.Remove(best);
+            }
+            return (doors, windows);
+        }
+
+        /// <summary>
+        /// Values each group of portals that close with doors, best value per portal first, by the map's
+        /// area graph alone: the triangles a shut door cuts off, weighted by how much of the map is on
+        /// the near side. Portals that never close are given no value.
+        /// </summary>
+        public static List<Group> RankByAreas(AreaportalPass pass, BspVisibilityData compiled, BspSpace space, SamplePoints samples)
         {
             // What each area holds and how many standing positions are in it.
             var triangles = new Dictionary<int, long>();
@@ -98,26 +178,6 @@ namespace Viswright
 
             // Best value per portal first; ties by the first portal's id, so the order is the same every run.
             return groups.OrderByDescending(g => g.BenefitPerSlot).ThenBy(g => g.Portals[0].Id).ToList();
-        }
-
-        /// <summary>
-        /// The portals to keep within <paramref name="slots"/>: groups with any value, best first, then
-        /// portals that never close while room remains.
-        /// </summary>
-        public static HashSet<VmfNode> Choose(AreaportalPass pass, IReadOnlyList<Group> ranked, int slots)
-        {
-            var keep = new HashSet<VmfNode>();
-            foreach (var group in ranked.Where(g => g.Benefit > 0))
-            {
-                if (keep.Count + group.Portals.Count > slots) continue;
-                keep.UnionWith(group.Portals);
-            }
-            foreach (var (portal, doorway, _, _) in pass.Added.Where(a => !a.Doorway.Closes).OrderBy(a => a.Portal.Id))
-            {
-                if (keep.Count >= slots) break;
-                keep.Add(portal);
-            }
-            return keep;
         }
 
         /// <summary>

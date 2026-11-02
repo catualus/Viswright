@@ -56,17 +56,29 @@ namespace Viswright
                 var doors = working.Entities.Where(e => Audit.DoorClasses.Contains(e.Classname ?? "", StringComparer.OrdinalIgnoreCase)).ToList();
                 int existing = working.Entities.Count(e => Audit.PortalClasses.Contains(e.Classname ?? "", StringComparer.OrdinalIgnoreCase));
                 var doorways = new List<Doorway>();
+                var windows = new List<Window>();
                 foreach (var item in accepted.Where(i => i.Pass == "areaportals"))
                 {
+                    if (item.Id.StartsWith("window:", StringComparison.Ordinal))
+                    {
+                        if (!item.Data.ContainsKey("x0"))
+                            left.Add((item.Id, "it has no opening"));
+                        else if (existing + doorways.Count + windows.Count >= Audit.PortalBudget)
+                            left.Add((item.Id, $"Garry's Mod's {Audit.PortalBudget} areaportals are used up"));
+                        else
+                            windows.Add(DecisionFile.Window(item.Data));
+                        continue;
+                    }
                     var door = FindDoor(doors, item);
                     if (door == null || item.Data.Count == 0)
                         left.Add((item.Id, "its door is no longer in the map"));
-                    else if (existing + doorways.Count >= Audit.PortalBudget)
+                    else if (existing + doorways.Count + windows.Count >= Audit.PortalBudget)
                         left.Add((item.Id, $"Garry's Mod's {Audit.PortalBudget} areaportals are used up"));
                     else
                         doorways.Add(DecisionFile.Doorway(door, item.Data));
                 }
                 portalPass.Apply(doorways);
+                portalPass.ApplyWindows(windows);
             }
 
             // Detail: the world brushes with the decided bounds.
@@ -138,7 +150,7 @@ namespace Viswright
 
             // One compile checks the lot; whatever it shows does not fit is taken out and the map compiled again.
             WorkCompile? compile = null;
-            for (int round = 1; round <= 4; round++)
+            for (int round = 1; round <= 12; round++)
             {
                 compile = WorkCompile.Prepare(working, copy, Path.Combine(work, "pinned"), name);
                 var run = compile.RunVbsp(tools);
@@ -149,9 +161,11 @@ namespace Viswright
                     if (portalPass != null)
                     {
                         var near = portalPass.Added.Where(a => leak.Points.Any(p => Distance(p, a.Doorway) < 64)).Select(a => a.Portal).ToHashSet();
-                        dropped += near.Count;
+                        var nearWindows = portalPass.AddedWindows.Where(a => leak.Points.Any(p => Distance(p, a.Window.Mins, a.Window.Maxs) < 64)).Select(a => a.Window).ToHashSet();
+                        dropped += near.Count + nearWindows.Count;
                         portalPass.KeepOnly(portalPass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet(),
                             "a leak ran through its doorway: the portal no longer seals it");
+                        portalPass.KeepWindows(portalPass.AddedWindows.Select(a => a.Window).Where(w => !nearWindows.Contains(w)).ToHashSet());
                     }
                     if (detailPass != null)
                         dropped += detailPass.RevertNear(leak, 64);
@@ -164,6 +178,14 @@ namespace Viswright
                     Log.Info($"pinned: {dropped} item(s) on a leak path left out");
                     continue;
                 }
+                if (!run.Succeeded && portalPass?.RefusedBy(run.Output) is var (refusedDoors, refusedWindows) && refusedDoors.Count + refusedWindows.Count > 0)
+                {
+                    int removed = portalPass.DropWithDependents(refusedDoors, refusedWindows, "VBSP no longer puts it, or a window it needs, between two areas");
+                    foreach (var w in refusedWindows)
+                        left.Add(("window:" + ReviewLog.Anchor(w.Mins), "VBSP no longer puts it between two areas"));
+                    Log.Info($"pinned: VBSP refused {refusedDoors.Count + refusedWindows.Count} portal(s); {removed} left out with those needing them");
+                    continue;
+                }
                 if (!run.Succeeded)
                 {
                     UndoAll();
@@ -173,12 +195,21 @@ namespace Viswright
                 int retry = 0;
                 if (portalPass is { Added.Count: > 0 })
                 {
-                    var invalid = AreaportalSelection.Invalid(portalPass, BspVisibilityData.Load(compile.Bsp));
+                    var placed = BspVisibilityData.Load(compile.Bsp);
+                    var invalid = AreaportalSelection.Invalid(portalPass, placed);
+                    var invalidWindows = AreaportalSelection.InvalidWindows(portalPass, placed);
                     if (invalid.Count > 0)
                     {
                         portalPass.KeepOnly(portalPass.Added.Select(a => a.Portal).Except(invalid).ToHashSet(),
                             "VBSP no longer puts it between two areas");
                         retry += invalid.Count;
+                    }
+                    if (invalidWindows.Count > 0)
+                    {
+                        portalPass.KeepWindows(portalPass.AddedWindows.Select(a => a.Window).Except(invalidWindows).ToHashSet());
+                        foreach (var w in invalidWindows)
+                            left.Add(("window:" + ReviewLog.Anchor(w.Mins), "VBSP no longer puts it between two areas"));
+                        retry += invalidWindows.Count;
                     }
                 }
                 if (slimPass is { Converted.Count: > 0 })
@@ -191,7 +222,8 @@ namespace Viswright
                     break;
             }
 
-            if (compile == null || BspSpace.CollisionDifferences(BspSpace.Load(compile.Bsp).CollisionShapes(CollisionMask), collision) is > 0 and var changed && changed > 0)
+            if (compile == null || BspSpace.CollisionDifferences(BspSpace.Load(compile.Bsp).CollisionShapes(CollisionMask)
+                    .Where(s => portalPass == null || !portalPass.IsStandIn(s)).ToList(), collision) is > 0 and var changed && changed > 0)
             {
                 UndoAll();
                 Log.Warn("pinned: collision changed with the accepted items in; compiling the map as it is");
@@ -209,7 +241,7 @@ namespace Viswright
 
             var wallPaths = wallSolids.Select(s => $"world#{working.World.Id}/solid#{s.Id}").ToHashSet();
             guard.Allow("hints", change => change.Kind == VmfChangeKind.Added && wallPaths.Contains(change.Path));
-            int portals = portalPass?.Added.Count ?? 0, detailed = detailPass?.Moved.Count ?? 0, hints = (hintPass?.Placed.Count ?? 0) + wallSolids.Count;
+            int portals = (portalPass?.Added.Count ?? 0) + (portalPass?.AddedWindows.Count ?? 0), detailed = detailPass?.Moved.Count ?? 0, hints = (hintPass?.Placed.Count ?? 0) + wallSolids.Count;
             int nodrawn = nodrawPass?.Changed.Count ?? 0, faded = fadePass?.Changed.Count ?? 0, slimmed = slimPass?.Converted.Count ?? 0;
             Log.Check($"pinned: applied {portals} areaportal(s), {detailed} detail brush(es), {hints} hint(s), {nodrawn} nodraw face(s), " +
                 $"{faded} fade(s), {slimmed} entit(ies) made static");
@@ -223,6 +255,7 @@ namespace Viswright
 
             WriteAdopt(working, Path.Combine(Path.GetDirectoryName(copy)!, name + "_adopt.vmf"),
                 (portalPass?.Added.SelectMany(a => a.NamedDoor ? new[] { a.Portal, a.Door } : [a.Portal]) ?? [])
+                    .Concat(portalPass?.AddedWindows.SelectMany(a => a.StandIn == null ? [a.Portal] : new[] { a.Portal, a.StandIn }) ?? [])
                     .Concat(detailPass?.EntityNode is { } detailEntity ? [detailEntity] : [])
                     .Concat(hintPass?.Placed.Values.Select(p => p.Solid) ?? [])
                     .Concat(wallSolids)

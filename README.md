@@ -22,12 +22,24 @@ none, closing with the door. The opening is found by walking out from the door t
 compile's world brushes - left, right, up, down - and only a clean rectangle framed by world brushes on
 all four sides is used; the portal sits inside the wall's thickness, a unit into the frame all round.
 Before compiling, VBSP's own area flood is repeated over the first compile's portal file: a doorway whose
-two sides are joined some other way (an open window, a gap, a door with no portal) would not divide two
-areas and is dropped. The portal closes with the door when the door, together with any opaque brushes
-framing it, fills the opening and the door's materials are opaque; otherwise it stays open. Unnamed
-doors are named `vw_door_<id>`, unique across the map. Garry's Mod loads at most 191 areaportals, the
-map's own included, so the portals are ranked by what shutting their door hides from where players
-stand, and the best that fit are kept; that set is compiled again to prove it.
+two sides are joined some other way would not divide two areas. The way round is followed to the first
+opening in a wall - found and checked as a doorway is - and closed: by that doorway's own portal if it is
+one, otherwise by a portal in the opening, then the next, up to six. A window gets a
+func_areaportalwindow that fades shut between 1,000 and 1,200 units away, with black fading in over it
+(Valve's own distances and stand-in); a passage the floor runs through gets an
+always-open func_areaportal. Openings water runs through are left alone. A doorway whose rooms still meet,
+through something that is not a framed opening, is dropped. The portal closes with the door when the
+door, together with any opaque brushes framing it, fills the opening and the door's materials are
+opaque; otherwise it stays open. Unnamed doors are named `vw_door_<id>`, unique across the map.
+
+Garry's Mod loads at most 191 areaportals, windows and the map's own included, so the portals are
+ranked by what they stop the engine drawing. With every door shut, the engine floods out from each
+standing point through the open portals, narrowing the view to each portal's outline, and only draws
+what that leaves in view; a window past its fade distance is shut. The triangles drawn - world faces
+and static props, from each model's `.dx90.vtx` - are counted with and without each group of portals:
+doors between the same two areas, and a door with the windows and doorways it needs, a window two
+doors need paid for once. The groups worth most per portal are kept, and that set is compiled again to
+prove it.
 
 **Make detail** (`-detail`) turns small and complex world brushes into func_detail: trim, railings,
 pillars, stairs, frames. Left out: brushes that face the void (checked against the first compile),
@@ -112,6 +124,14 @@ With all three passes (2026-11-01):
 The world triangles a shut door saves are few, because VVIS already hides most interiors from the street.
 What a closed areaportal also does - stop drawing the props and entities behind it, and stop the server
 sending them - is not in that figure.
+
+With windows (2026-11-02, rp_downtown_meowy, areaportals alone): of 228 framed doorways, 86 divide their
+rooms only once the windows and gaps the rooms meet through have portals too, 104 of them (79 windows,
+25 passages). Within the 80 portals the map has room for, the set kept is 50 doors (43 closing with
+their door) and 23 windows (15 fading), 184 of 191 portal numbers. With every door shut, a standing
+position draws 41,139 triangles, world and props, against 43,799 without them: 6.1 % less. Props are
+most of what is drawn; the map's own 111 portals already save about a third. In Garry's Mod the windows
+show the street up close and black once shut.
 
 Fades and Fewer entities (2026-11-01, 6 pixels):
 

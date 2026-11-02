@@ -197,6 +197,17 @@ namespace Viswright.Review
             return data;
         }
 
+        /// <summary>A window as numbers, for an item's data.</summary>
+        public static Dictionary<string, double> WindowData(Window w) => new()
+        {
+            ["axis"] = w.NormalAxis, ["x0"] = w.Mins.X, ["y0"] = w.Mins.Y, ["z0"] = w.Mins.Z,
+            ["x1"] = w.Maxs.X, ["y1"] = w.Maxs.Y, ["z1"] = w.Maxs.Z, ["passage"] = w.Passage ? 1 : 0,
+        };
+
+        /// <summary>The window an item's data describes.</summary>
+        public static Window Window(IReadOnlyDictionary<string, double> d) =>
+            new((int)d["axis"], new SourceKit.Geometry.Vec3(d["x0"], d["y0"], d["z0"]), new SourceKit.Geometry.Vec3(d["x1"], d["y1"], d["z1"]), d["passage"] != 0);
+
         /// <summary>The doorway an item's data describes, in <paramref name="door"/>.</summary>
         public static Doorway Doorway(SourceKit.Vmf.VmfNode door, IReadOnlyDictionary<string, double> d) =>
             new(door, (int)d["axis"], d["a0"], d["a1"], d["w0"], d["w1"], d["z0"], d["z1"], d["closes"] != 0, d["startOpen"] != 0,

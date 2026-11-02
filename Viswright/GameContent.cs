@@ -19,6 +19,7 @@ namespace Viswright
         private readonly ConcurrentDictionary<string, StudioModel?> models = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> exists = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<StudioModel, bool> opaqueModels = new();
+        private readonly ConcurrentDictionary<string, int> triangles = new(StringComparer.OrdinalIgnoreCase);
 
         public MaterialOpacity Opacity { get; }
 
@@ -44,6 +45,57 @@ namespace Viswright
         });
 
         private bool Exists(string path) => exists.GetOrAdd(path, p => read(p) != null);
+
+        /// <summary>
+        /// The triangles a model draws at full detail, from its .dx90.vtx: each body part's first model,
+        /// level of detail 0, summed over its meshes' strip groups. Zero when the file is missing or
+        /// does not read as one.
+        /// </summary>
+        public int ModelTriangles(string modelPath) => triangles.GetOrAdd(modelPath, p =>
+        {
+            string path = Path.ChangeExtension(p.Replace('\\', '/').ToLowerInvariant(), ".dx90.vtx");
+            return read(path) is { } bytes ? VtxTriangles(bytes) : 0;
+        });
+
+        internal static int VtxTriangles(byte[] b)
+        {
+            // FileHeader_t, then body parts (8 bytes), models (8), LODs (12), meshes (9, packed) and
+            // strip groups (25, packed); every offset counts from the start of its own header.
+            int Int(long at) => at >= 0 && at + 4 <= b.Length ? BitConverter.ToInt32(b, (int)at) : throw new InvalidDataException();
+            try
+            {
+                if (Int(0) != 7)
+                    return 0;
+                long total = 0;
+                int bodyParts = Int(28);
+                long bodyAt = Int(32);
+                for (int bp = 0; bp < bodyParts; bp++)
+                {
+                    long part = bodyAt + bp * 8;
+                    if (Int(part) < 1)
+                        continue;
+                    long model = part + Int(part + 4);
+                    if (Int(model) < 1)
+                        continue;
+                    long lod = model + Int(model + 4);
+                    int meshes = Int(lod);
+                    long meshAt = lod + Int(lod + 4);
+                    for (int m = 0; m < meshes; m++)
+                    {
+                        long mesh = meshAt + m * 9;
+                        int groups = Int(mesh);
+                        long groupAt = mesh + Int(mesh + 4);
+                        for (int g = 0; g < groups; g++)
+                            total += Int(groupAt + g * 25 + 8) / 3;
+                    }
+                }
+                return total is > 0 and < 10_000_000 ? (int)total : 0;
+            }
+            catch (InvalidDataException)
+            {
+                return 0;
+            }
+        }
 
         /// <summary>
         /// Whether every texture a model draws with is opaque. Each texture is looked for in the model's

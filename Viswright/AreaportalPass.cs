@@ -41,7 +41,7 @@ namespace Viswright
     /// hit, left, right, up and down; anything that is not a clean rectangle framed by world brushes
     /// is left alone.
     /// </summary>
-    public sealed class AreaportalPass
+    public sealed partial class AreaportalPass
     {
         public const string NamePrefix = "vw_ap_";
         public const string DoorNamePrefix = "vw_door_";
@@ -153,7 +153,12 @@ namespace Viswright
         /// whose two sides still meet is dropped. Dropping one reopens its doorway, which can join
         /// another's sides, so this repeats until nothing more is dropped.
         /// </summary>
-        public List<Doorway> SealedDoorways(List<Doorway> doorways, SourceKit.Compile.PortalFile portals, BspSpace compiled)
+        /// <param name="rescue">
+        /// Whether a doorway whose rooms meet another way may be kept by closing the windows and gaps they
+        /// meet through as well (see <see cref="Rescued"/>); without it, the windows already in
+        /// <see cref="Windows"/> stay closed and nothing more is added.
+        /// </param>
+        public List<Doorway> SealedDoorways(List<Doorway> doorways, SourceKit.Compile.PortalFile portals, BspSpace compiled, bool rescue = false)
         {
             var centres = portals.Portals.Select(p => p.Winding.Centre).ToArray();
 
@@ -178,13 +183,24 @@ namespace Viswright
                 sides[d] = (SideCluster(d, lo, -1, compiled), SideCluster(d, hi, +1, compiled));
             }
 
+            List<int> WindowCuts(Window w) => Enumerable.Range(0, centres.Length)
+                .Where(i => Inside(centres[i], w.Mins - new Vec3(1, 1, 1), w.Maxs + new Vec3(1, 1, 1))).ToList();
+            var boxes = doorways.Select(d =>
+            {
+                double lo = (double.IsNaN(d.WallA0) ? d.A0 : d.WallA0) - 1, hi = (double.IsNaN(d.WallA1) ? d.A1 : d.WallA1) + 1;
+                var a = d.Point(lo, d.W0, d.Z0); var b = d.Point(hi, d.W1, d.Z1);
+                return (Doorway: d, Mins: Vec3.Min(a, b), Maxs: Vec3.Max(a, b));
+            }).ToList();
+
             var kept = doorways.ToList();
-            int dropped;
+            int dropped, rounds = 0;
             do
             {
                 var closed = new HashSet<int>(alwaysClosed);
                 foreach (var d in kept)
                     closed.UnionWith(closes[d]);
+                foreach (var w in Windows)
+                    closed.UnionWith(WindowCuts(w));
 
                 var parent = Enumerable.Range(0, portals.ClusterCount).ToArray();
                 int Find(int x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; }
@@ -200,6 +216,22 @@ namespace Viswright
                     var (a, b) = sides[d];
                     return a < 0 || b < 0 || Find(a) == Find(b);
                 }).ToList();
+
+                // Each leaky doorway whose rooms can be divided by closing what joins them is kept, with
+                // what it needs closed; a doorway it needs is kept too, and checked again next round.
+                if (rescue && ++rounds <= 20)
+                    foreach (var d in leaky.ToList())
+                    {
+                        var (a, b) = sides[d];
+                        if (a < 0 || b < 0 || Rescue(d, a, b, closed, portals, compiled, boxes, x => closes[x], WindowCuts) is not { } found)
+                            continue;
+                        Rescued[d] = found;
+                        foreach (var w in found.Windows.Where(w => !Windows.Contains(w)))
+                            Windows.Add(w);
+                        foreach (var need in found.Doorways.Where(n => !kept.Contains(n)))
+                            kept.Add(need);
+                        leaky.Remove(d);
+                    }
                 dropped = leaky.Count;
                 if (leaky.Count > 0)
                 {
@@ -225,6 +257,11 @@ namespace Viswright
                 }
             } while (dropped > 0);
 
+            // Windows only the doorways given up needed are left out.
+            var needed = WindowsNeededBy(kept);
+            Windows.RemoveAll(w => !needed.Contains(w));
+            foreach (var d in Rescued.Keys.Where(d => !kept.Contains(d)).ToList())
+                Rescued.Remove(d);
             return kept;
         }
 
@@ -538,7 +575,7 @@ namespace Viswright
                 else
                     portal.Set("StartOpen", "1");
 
-                id = AddBox(portal, d, id);
+                id = AddBox(portal, d.Mins, d.Maxs, id, _ => "TOOLS/TOOLSAREAPORTAL");
                 added.Add((portal, d, d.Door, named));
             }
         }
@@ -560,12 +597,17 @@ namespace Viswright
             }
         }
 
-        public void RevertAll(string? why = null) => KeepOnly(new HashSet<VmfNode>(), why);
+        public void RevertAll(string? why = null)
+        {
+            KeepOnly(new HashSet<VmfNode>(), why);
+            KeepWindows(new HashSet<Window>());
+        }
 
         /// <summary>What the pass may have changed: its own portal entities, and the names it gave doors.</summary>
         public void Declare(ChangeGuard guard)
         {
-            var portals = new HashSet<string>(added.Select(a => $"entity#{a.Portal.Id}"));
+            var portals = new HashSet<string>(added.Select(a => $"entity#{a.Portal.Id}")
+                .Concat(addedWindows.SelectMany(a => a.StandIn == null ? [a.Portal] : new[] { a.Portal, a.StandIn }).Select(n => $"entity#{n.Id}")));
             // By the name given rather than the door's id alone: ids can repeat, and the diff tells two
             // blocks with one id apart by position, which a path built here cannot predict.
             var named = new HashSet<string>(added.Where(a => a.NamedDoor).Select(a => a.Door.Get("targetname")!), StringComparer.OrdinalIgnoreCase);
@@ -576,10 +618,9 @@ namespace Viswright
                         && change.Path.Count(c => c == '/') == 1 && change.After != null && named.Contains(change.After))));
         }
 
-        private static long AddBox(VmfNode entity, Doorway d, long id)
+        /// <summary>Adds a box brush to <paramref name="entity"/>, each face's material chosen by the axis it faces along.</summary>
+        private static long AddBox(VmfNode entity, Vec3 lo, Vec3 hi, long id, Func<int, string> material)
         {
-            var lo = d.Mins;
-            var hi = d.Maxs;
             string F(double v) => Invariant(Math.Round(v, 2));
             string P(Vec3 p) => $"({F(p.X)} {F(p.Y)} {F(p.Z)})";
             Vec3 V(double x, double y, double z) => new(x, y, z);
@@ -596,13 +637,15 @@ namespace Viswright
             var solid = new VmfNode("solid");
             entity.Add(solid);
             solid.Set("id", Invariant(++id));
-            foreach (var (plane, u, v) in sides)
+            int[] faceAxis = [2, 2, 0, 0, 1, 1];
+            for (int f = 0; f < sides.Length; f++)
             {
+                var (plane, u, v) = sides[f];
                 var side = new VmfNode("side");
                 solid.Add(side);
                 side.Set("id", Invariant(++id));
                 side.Set("plane", plane);
-                side.Set("material", "TOOLS/TOOLSAREAPORTAL");
+                side.Set("material", material(faceAxis[f]));
                 side.Set("uaxis", u);
                 side.Set("vaxis", v);
                 side.Set("rotation", "0");

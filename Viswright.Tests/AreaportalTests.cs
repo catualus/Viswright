@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
+using SourceKit.Geometry;
 using SourceKit.Vmf;
 using Xunit;
 
@@ -104,7 +105,7 @@ namespace Viswright.Tests
         }
 
         [Fact]
-        public void APortalTheRoomsCanSeeRoundIsNotKept()
+        public void AWindowTheRoomsMeetThroughGetsAFadingPortalToo()
         {
             var tools = Tools();
             if (tools == null)
@@ -114,10 +115,22 @@ namespace Viswright.Tests
 
             var result = Optimizer.Run(new OptimizeOptions { Input = map, Areaportals = true, Tools = tools });
 
-            Assert.Equal(0, result.Portals);
-            Assert.DoesNotContain(VmfDocument.Load(result.CopyPath!).Entities, e => e.Classname == "func_areaportal");
-            // Found before compiling: the window joins the rooms, so a portal in the doorway would not divide them.
-            Assert.Contains(ws.Output, l => l.Contains("the rooms either side are joined another way"));
+            // Found before compiling: the window above the door joins the rooms, so it is closed too.
+            Assert.Contains(ws.Output, l => l.Contains("divide only once 1 window(s)"));
+            Assert.True(result.Portals == 1, string.Join(" | ", ws.Output.Where(l => l.Contains("areaportal"))));
+            var copy = VmfDocument.Load(result.CopyPath!);
+            Assert.Single(copy.Entities, e => e.Classname == "func_areaportal");
+            var window = Assert.Single(copy.Entities, e => e.Classname == "func_areaportalwindow");
+            Assert.Equal(AreaportalPass.FadeEnd.ToString(System.Globalization.CultureInfo.InvariantCulture), window.Get("FadeDist"));
+            var standIn = Assert.Single(copy.Entities, e => e.Classname == "func_brush");
+            Assert.Equal(window.Get("target"), standIn.Get("targetname"));
+            Assert.Equal("1", standIn.Get("Solidity"));
+            Assert.Equal(2, standIn.Descendants().Count(n => n.Get("material") == AreaportalPass.StandInMaterial));
+
+            // The window's portal fills the hole at z 160..192, a unit into the frame, through the wall.
+            var brush = VmfBrush.Build(window.Child("solid")!)!;
+            Assert.Equal(new SourceKit.Geometry.Vec3(248, 95, 159), brush.Mins);
+            Assert.Equal(new SourceKit.Geometry.Vec3(264, 161, 193), brush.Maxs);
         }
 
         [Fact]
@@ -137,12 +150,60 @@ namespace Viswright.Tests
             };
 
             // One slot: the single portal worth 50 beats the pair worth 40 each but needing two.
-            var keep = AreaportalSelection.Choose(pass, ranked.OrderByDescending(g => g.BenefitPerSlot).ToList(), 1);
-            Assert.Equal([portals[0]], keep);
+            var keep = AreaportalSelection.Choose(ranked, 1);
+            Assert.Equal([portals[0]], keep.Doors);
 
             // Three slots: everything fits.
-            keep = AreaportalSelection.Choose(pass, ranked.OrderByDescending(g => g.BenefitPerSlot).ToList(), 3);
-            Assert.Equal(3, keep.Count);
+            keep = AreaportalSelection.Choose(ranked, 3);
+            Assert.Equal(3, keep.Doors.Count);
+        }
+
+        [Fact]
+        public void AModelsTrianglesAreReadFromItsVtx()
+        {
+            // Header, one body part, one model, one LOD, one mesh with two strip groups of 30 and 6 indices.
+            var vtx = new byte[73 + 2 * 25];
+            void Put(int at, int value) => BitConverter.GetBytes(value).CopyTo(vtx, at);
+            Put(0, 7); Put(28, 1); Put(32, 36);
+            Put(36, 1); Put(40, 8);
+            Put(44, 1); Put(48, 8);
+            Put(52, 1); Put(56, 12);
+            Put(64, 2); Put(68, 9);
+            Put(73 + 8, 30); Put(73 + 25 + 8, 6);
+
+            Assert.Equal(12, GameContent.VtxTriangles(vtx));
+            Assert.Equal(0, GameContent.VtxTriangles(vtx[..40]));
+            vtx[0] = 6;
+            Assert.Equal(0, GameContent.VtxTriangles(vtx));
+        }
+
+        [Fact]
+        public void AWindowTwoDoorsNeedIsPaidForOnce()
+        {
+            var map = VmfDocument.Parse(TwoRooms());
+            var pass = new AreaportalPass(map);
+            var door = map.Entities.Single(e => e.Classname == "func_door");
+            pass.Apply(Enumerable.Range(0, 3).Select(i =>
+                new Doorway(door, 0, 254, 258, 95 + i * 1000, 161 + i * 1000, 15, 113, Closes: true, StartOpen: false)));
+            var portals = pass.Added.Select(a => a.Portal).ToList();
+            var window = new Window(0, new Vec3(254, 300, 40), new Vec3(258, 340, 90), Passage: false);
+            var ranked = new[]
+            {
+                new AreaportalSelection.Group([portals[0]], [window], 60),
+                new AreaportalSelection.Group([portals[1]], [window], 60),
+                new AreaportalSelection.Group([portals[2]], 50),
+            };
+
+            // Three slots: the lone door, then one door with the window; the second door would need a fourth.
+            var keep = AreaportalSelection.Choose(ranked, 3);
+            Assert.Equal(2, keep.Doors.Count);
+            Assert.Contains(portals[2], keep.Doors);
+            Assert.Equal([window], keep.Windows);
+
+            // Four slots: once the window is in, the second door costs one slot for 60.
+            keep = AreaportalSelection.Choose(ranked, 4);
+            Assert.Equal(3, keep.Doors.Count);
+            Assert.Single(keep.Windows);
         }
 
         [Fact]

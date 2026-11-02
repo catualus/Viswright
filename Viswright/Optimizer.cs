@@ -826,7 +826,6 @@ namespace Viswright
 
             static string DoorKey(VmfNode door) => door.Get("targetname") is { Length: > 0 } n && !n.StartsWith(AreaportalPass.DoorNamePrefix, StringComparison.Ordinal)
                 ? n : "door@" + ReviewLog.Anchor(ReviewLog.Bounds(door).Mins);
-            int windows = 0;
             foreach (var (door, reason) in pass.SkippedDoors)
             {
                 var joined = pass.JoinedBy.FirstOrDefault(kv => ReferenceEquals(kv.Key.Door, door));
@@ -834,37 +833,56 @@ namespace Viswright
                 {
                     review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, AreaportalPass.LeakKind(d, joined.Value), d.Mins, d.Maxs)
                         { Detail = door.Classname, Data = DecisionFile.DoorwayData(d), Leak = joined.Value });
-                    // A window or gap in the door's own wall: a func_areaportalwindow in it, fading shut at a
-                    // distance, would let a portal in the door divide the rooms. It changes how the window
-                    // looks from afar, so it is suggested for the mapper, never applied.
-                    if (AreaportalPass.WallOpening(d, joined.Value) is var (wlo, whi))
-                    {
-                        windows++;
-                        review.Add(new ReviewItem("window:" + DoorKey(door), "areaportals", ItemStatus.Suggested,
-                            "a func_areaportalwindow in this opening, fading shut at a distance with a stand-in brush, would let an areaportal in the door beside it divide the two rooms",
-                            wlo, whi) { Detail = door.Get("targetname") ?? door.Classname, Leak = joined.Value });
-                    }
                     continue;
                 }
                 var (lo, hi) = ReviewLog.Bounds(door);
                 review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, reason, lo, hi)
                     { Detail = door.Classname });
             }
-            if (windows > 0)
-                Log.Info($"areaportals: {windows} doorway(s) could divide two areas if the window or gap in the same wall had an areaportal window; suggested in the review");
             foreach (var (doorway, door, reason) in pass.Dropped)
                 review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Rejected, reason, doorway.Mins, doorway.Maxs)
                     { Detail = door.Classname, Data = DecisionFile.DoorwayData(doorway) });
+
+            // Which kept doors each window lets divide their rooms, for its reason.
+            var doorsOf = new Dictionary<Window, List<string>>();
             foreach (var (portal, doorway, door, named) in pass.Added)
             {
                 string closes = doorway.Closes ? $"closes with {door.Get("targetname")}"
                     : $"never closes: {pass.OpenOnlyDoors.GetValueOrDefault(door, "the door does not fill the opening")}";
-                review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Applied,
-                    named ? $"{closes} (door given that name)" : closes, doorway.Mins, doorway.Maxs)
+                if (named)
+                    closes += " (door given that name)";
+                if (pass.Rescued.TryGetValue(doorway, out var rescue))
+                {
+                    var parts = new List<string>();
+                    if (rescue.Windows.Count > 0)
+                        parts.Add($"{rescue.Windows.Count} window(s) or gap(s) its rooms meet through");
+                    if (rescue.Doorways.Count > 0)
+                        parts.Add($"{rescue.Doorways.Count} other doorway(s)");
+                    closes += $"; divides its rooms only with portals in {string.Join(" and ", parts)} too";
+                    foreach (var w in rescue.Windows)
+                    {
+                        if (!doorsOf.TryGetValue(w, out var list)) doorsOf[w] = list = [];
+                        list.Add(door.Get("targetname") ?? door.Classname ?? "a door");
+                    }
+                }
+                review.Add(new ReviewItem("areaportal:" + DoorKey(door), "areaportals", ItemStatus.Applied, closes, doorway.Mins, doorway.Maxs)
                 {
                     Detail = portal.Get("targetname"),
                     NodeIds = named ? [portal.Id ?? 0, door.Id ?? 0] : [portal.Id ?? 0],
                     Data = DecisionFile.DoorwayData(doorway),
+                });
+            }
+            foreach (var (portal, window, standIn) in pass.AddedWindows)
+            {
+                string doors = string.Join(", ", doorsOf.GetValueOrDefault(window, []).Distinct().Take(4));
+                string why = window.Passage
+                    ? $"an always-open portal in this passage, so {doors} can divide its rooms"
+                    : $"fades shut between {AreaportalPass.FadeStart:N0} and {AreaportalPass.FadeEnd:N0} units away, black fading in over it, so {doors} can divide its rooms";
+                review.Add(new ReviewItem("window:" + ReviewLog.Anchor(window.Mins), "areaportals", ItemStatus.Applied, why, window.Mins, window.Maxs)
+                {
+                    Detail = portal.Get("targetname"),
+                    NodeIds = standIn == null ? [portal.Id ?? 0] : [portal.Id ?? 0, standIn.Id ?? 0],
+                    Data = DecisionFile.WindowData(window),
                 });
             }
             return added;
@@ -884,10 +902,14 @@ namespace Viswright
             }
 
             var space = BspSpace.Load(baseline.Bsp);
+            var prt = SourceKit.Compile.PortalFile.Load(baseline.Prt);
             var doorways = pass.FindDoorways(space, content);
             int framed = doorways.Count;
-            doorways = pass.SealedDoorways(doorways, SourceKit.Compile.PortalFile.Load(baseline.Prt), space);
+            doorways = pass.SealedDoorways(doorways, prt, space, rescue: true);
             Log.Info($"areaportals: {framed} framed doorway(s), {doorways.Count} of them dividing two areas, {doorways.Count(d => d.Closes)} with a door that can close them; {slots} slot(s) free");
+            if (pass.Rescued.Count > 0)
+                Log.Info($"areaportals: {pass.Rescued.Count} of those divide only once {pass.Windows.Count} window(s) or gap(s) their rooms meet through get a portal too " +
+                    $"({pass.Windows.Count(w => !w.Passage)} fading shut at a distance, {pass.Windows.Count(w => w.Passage)} always open in a passage)");
             foreach (var (reason, count) in pass.Skipped.OrderByDescending(kv => kv.Value))
                 Log.Info($"  {count} door(s) skipped: {reason}");
             foreach (var (reason, count) in pass.OpenOnly.OrderByDescending(kv => kv.Value))
@@ -896,46 +918,12 @@ namespace Viswright
                 return 0;
 
             pass.Apply(doorways);
+            pass.ApplyWindows(pass.Windows);
 
             WorkCompile? compile = null;
             BspVisibilityData? vis = null;
-            for (int round = 1; round <= 6 && pass.Added.Count > 0; round++)
-            {
-                compile = WorkCompile.Prepare(working, copy, folder, name);
-                var run = compile.RunVbsp(tools);
-                if (!run.Succeeded && !compile.Leaked)
-                {
-                    pass.RevertAll("VBSP failed with the portals in, so the pass was undone");
-                    Log.Warn($"areaportals: undone, VBSP failed: {LastLines(run)}");
-                    return 0;
-                }
-                if (compile.Leaked)
-                {
-                    // An areaportal that does not seal its two areas makes VBSP write a pointfile.
-                    var leak = compile.LeakPath!;
-                    var near = pass.Added.Where(a => leak.Points.Any(p => Distance(p, a.Doorway) < 64)).Select(a => a.Portal).ToHashSet();
-                    if (near.Count == 0)
-                    {
-                        pass.RevertAll("the map leaked somewhere no new portal is near, so the pass was undone");
-                        Log.Warn("areaportals: undone, the map leaked somewhere no new portal is near");
-                        return 0;
-                    }
-                    pass.KeepOnly(pass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet(),
-                        "a leak ran through its doorway: the portal did not seal it");
-                    Log.Info($"areaportals: round {round} leaked; {near.Count} portal(s) on the leak path removed");
-                    continue;
-                }
-
-                vis = BspVisibilityData.Load(compile.Bsp);
-                var invalid = AreaportalSelection.Invalid(pass, vis);
-                if (invalid.Count == 0)
-                    break;
-                pass.KeepOnly(pass.Added.Select(a => a.Portal).Except(invalid).ToHashSet(),
-                    "VBSP did not put it between two areas: an open window or gap joins them");
-                Log.Info($"areaportals: round {round}: {invalid.Count} portal(s) do not divide two areas (an open window or gap joins them) and are removed");
-                vis = null;
-            }
-
+            if (!Place(1, "the map"))
+                return 0;
             if (compile == null || vis == null || pass.Added.Count == 0)
             {
                 pass.RevertAll("no portal could be placed, so the pass was undone");
@@ -943,17 +931,29 @@ namespace Viswright
                 return 0;
             }
 
-            var ranked = AreaportalSelection.Rank(pass, vis, BspSpace.Load(compile.Bsp), samples);
-            var keep = AreaportalSelection.Choose(pass, ranked, slots);
-            int dropped = pass.Added.Count - keep.Count;
-            pass.KeepOnly(keep, $"left out to stay within Garry's Mod's {Audit.PortalBudget} areaportals: it hides less than the ones kept");
+            // What each portal is worth needs the PVS, so the candidates are put through VVIS once.
+            List<AreaportalSelection.Group> ranked;
+            if (compile.RunVvis(tools).Succeeded && BspVisibilityData.Load(compile.Bsp) is { HasVisibility: true } seen)
+            {
+                var culling = new PortalCulling(seen, BspSpace.Load(compile.Bsp), samples, content.ModelTriangles);
+                ranked = AreaportalSelection.Rank(pass, seen, culling);
+            }
+            else
+            {
+                Log.Warn("areaportals: VVIS failed on the candidates, so they are valued by the area graph alone and windows are left out");
+                ranked = AreaportalSelection.RankByAreas(pass, vis, BspSpace.Load(compile.Bsp), samples);
+            }
+            var (keepDoors, keepWindows) = AreaportalSelection.Choose(ranked, slots);
+            int dropped = pass.Added.Count + pass.AddedWindows.Count - keepDoors.Count - keepWindows.Count;
+            pass.KeepOnly(keepDoors, $"left out to stay within Garry's Mod's {Audit.PortalBudget} areaportals: it hides less than the ones kept");
+            pass.KeepWindows(keepWindows);
             if (dropped > 0)
                 Log.Info($"areaportals: {dropped} portal(s) worth least left out to stay within the budget");
 
-            // Leaving portals out reopens their doorways, which can join the two sides of one that is kept.
-            // The flood finds those before compiling; anything it misses shows up as a leak below.
-            var stillSealed = pass.SealedDoorways(pass.Added.Select(a => a.Doorway).ToList(),
-                SourceKit.Compile.PortalFile.Load(baseline.Prt), space).ToHashSet();
+            // Leaving portals out reopens their doorways and windows, which can join the two sides of one
+            // that is kept. The flood finds those before compiling; anything it misses shows up as a leak below.
+            pass.Windows.RemoveAll(w => !keepWindows.Contains(w));
+            var stillSealed = pass.SealedDoorways(pass.Added.Select(a => a.Doorway).ToList(), prt, space).ToHashSet();
             int unsealed = pass.Added.Count(a => !stillSealed.Contains(a.Doorway));
             if (unsealed > 0)
             {
@@ -961,47 +961,18 @@ namespace Viswright
                     "no longer divides two areas once the portals left out reopened their doorways");
                 Log.Info($"areaportals: {unsealed} more no longer divide two areas once the others are left out");
             }
+            pass.KeepWindows(pass.WindowsNeededBy(pass.Added.Select(a => a.Doorway)));
 
             // The set kept is proven by its own compile.
-            for (int round = 1; round <= 6 && pass.Added.Count > 0; round++)
+            if (!Place(2, "the chosen set") || pass.Added.Count == 0)
             {
-                compile = WorkCompile.Prepare(working, copy, folder, name);
-                var run = compile.RunVbsp(tools);
-                if (compile.Leaked)
-                {
-                    var leak = compile.LeakPath!;
-                    var near = pass.Added.Where(a => leak.Points.Any(p => Distance(p, a.Doorway) < 64)).Select(a => a.Portal).ToHashSet();
-                    if (near.Count == 0)
-                    {
-                        pass.RevertAll("the chosen set leaked somewhere no new portal is near, so the pass was undone");
-                        Log.Warn("areaportals: undone, the chosen set leaks somewhere no new portal is near");
-                        return 0;
-                    }
-                    pass.KeepOnly(pass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet(),
-                        "a leak ran through its doorway: the portal did not seal it");
-                    Log.Info($"areaportals: the chosen set leaked; {near.Count} portal(s) on the leak path removed");
-                    continue;
-                }
-                if (!run.Succeeded)
-                {
-                    pass.RevertAll("VBSP failed with the portals in, so the pass was undone");
-                    Log.Warn($"areaportals: undone, VBSP failed: {LastLines(run)}");
-                    return 0;
-                }
-                vis = BspVisibilityData.Load(compile.Bsp);
-                var invalid = AreaportalSelection.Invalid(pass, vis);
-                if (invalid.Count == 0)
-                    break;
-                pass.KeepOnly(pass.Added.Select(a => a.Portal).Except(invalid).ToHashSet(),
-                    "VBSP did not put it between two areas: an open window or gap joins them");
-            }
-            if (pass.Added.Count == 0)
-            {
-                Log.Warn("areaportals: none could be placed");
+                if (pass.Added.Count == 0)
+                    Log.Warn("areaportals: none could be placed");
                 return 0;
             }
 
-            int differences = BspSpace.CollisionDifferences(BspSpace.Load(compile!.Bsp).CollisionShapes(CollisionMask), collision);
+            var shapes = BspSpace.Load(compile!.Bsp).CollisionShapes(CollisionMask).Where(s => !pass.IsStandIn(s)).ToList();
+            int differences = BspSpace.CollisionDifferences(shapes, collision);
             if (differences > 0 || vis!.HighestPortalNumber > Audit.PortalBudget)
             {
                 pass.RevertAll(differences > 0 ? "collision changed, so the pass was undone" : "a portal number went past what Garry's Mod loads, so the pass was undone");
@@ -1011,27 +982,99 @@ namespace Viswright
                 return 0;
             }
 
-            // What the closing portals hide beyond what VVIS already culls needs this set's own visibility.
-            var visRun = compile.RunVvis(tools);
-            string shutReport = "";
-            if (visRun.Succeeded)
+            // What the portals added stop the engine drawing, measured on this set's own visibility.
+            string drawReport = "";
+            if (compile.RunVvis(tools).Succeeded && BspVisibilityData.Load(compile.Bsp) is { HasVisibility: true } done)
             {
-                vis = BspVisibilityData.Load(compile.Bsp);
-                var shut = pass.Added.Where(a => a.Doorway.Closes)
-                    .Select(a => vis.PortalNumbersByName.GetValueOrDefault(a.Portal.Get("targetname")!, -1)).Where(k => k >= 0).ToHashSet();
-                var (open, closedCost) = AreaportalSelection.VisibleWithDoorsShut(vis, BspSpace.Load(compile.Bsp), samples, shut);
-                shutReport = $"with those doors shut, {closedCost:N0} triangles are visible from a standing position on average, against {open:N0} with them open";
+                vis = done;
+                var culling = new PortalCulling(done, BspSpace.Load(compile.Bsp), samples, content.ModelTriangles);
+                var mine = pass.Added.Select(a => a.Portal).Concat(pass.AddedWindows.Select(a => a.Portal))
+                    .Select(p => done.PortalNumbersByName.GetValueOrDefault(p.Get("targetname")!, -1)).Where(k => k >= 0).ToHashSet();
+                double without = culling.AverageWithout(mine);
+                drawReport = $"with every door shut, a standing position draws {culling.Average:N0} triangles (world and props) on average, " +
+                    $"against {without:N0} without the portals added ({(without > 0 ? 1 - culling.Average / without : 0):P1} less)";
             }
 
             pass.Declare(guard);
             int closing = pass.Added.Count(a => a.Doorway.Closes);
             int named = pass.Added.Count(a => a.NamedDoor);
-            Log.Check($"areaportals: {pass.Added.Count} added ({closing} close with their door, {named} door(s) given a name); " +
-                $"{vis.HighestPortalNumber} of {Audit.PortalBudget} portal numbers used; {vis.AreaCount - 1} areas");
-            if (shutReport.Length > 0)
-                Log.Check($"areaportals: {shutReport}");
+            int fading = pass.AddedWindows.Count(a => !a.Window.Passage);
+            Log.Check($"areaportals: {pass.Added.Count} added ({closing} close with their door, {named} door(s) given a name), " +
+                $"plus {pass.AddedWindows.Count} in windows and gaps ({fading} fading shut at a distance); " +
+                $"{vis!.HighestPortalNumber} of {Audit.PortalBudget} portal numbers used; {vis.AreaCount - 1} areas");
+            if (drawReport.Length > 0)
+                Log.Check($"areaportals: {drawReport}");
             final = compile;
             return pass.Added.Count;
+
+            // Compiles until VBSP places every portal between two areas, taking out those on a leak path
+            // or that divide nothing; false when the pass had to be undone.
+            bool Place(int stage, string what)
+            {
+                // VBSP stops at the first leak it finds, and a compile that leaks stops early, so there
+                // are many short rounds before the first that places everything.
+                for (int round = 1; round <= (stage == 1 ? 40 : 20) && pass.Added.Count > 0; round++)
+                {
+                    compile = WorkCompile.Prepare(working, copy, folder, name);
+                    var run = compile.RunVbsp(tools);
+                    if (compile.Leaked)
+                    {
+                        // An areaportal that does not seal its two areas makes VBSP write a pointfile.
+                        var leak = compile.LeakPath!;
+                        var near = pass.Added.Where(a => leak.Points.Any(p => Distance(p, a.Doorway) < 64)).Select(a => a.Portal).ToHashSet();
+                        var nearWindows = pass.AddedWindows.Where(a => leak.Points.Any(p => Distance(p, a.Window.Mins, a.Window.Maxs) < 64)).Select(a => a.Window).ToHashSet();
+                        if (near.Count == 0 && nearWindows.Count == 0)
+                        {
+                            pass.RevertAll($"{what} leaked somewhere no new portal is near, so the pass was undone");
+                            Log.Warn($"areaportals: undone, {what} leaked somewhere no new portal is near");
+                            return false;
+                        }
+                        int removed = pass.DropWithDependents(near, nearWindows, "a leak ran through its doorway or a window it needs: the portals did not seal it");
+                        Log.Info($"areaportals: round {round} leaked; {removed} portal(s) on the leak path, or needing one that was, removed");
+                        continue;
+                    }
+                    if (!run.Succeeded)
+                    {
+                        // A portal VBSP cannot put between two areas stops it with the brush named.
+                        var (refused, refusedWindows) = pass.RefusedBy(run.Output);
+                        if (refused.Count + refusedWindows.Count > 0)
+                        {
+                            int removed = pass.DropWithDependents(refused, refusedWindows, "VBSP could not put it, or a window it needs, between two areas");
+                            Log.Info($"areaportals: round {round}: VBSP refused {refused.Count + refusedWindows.Count} portal(s); {removed} removed with those needing them");
+                            continue;
+                        }
+                        pass.RevertAll("VBSP failed with the portals in, so the pass was undone");
+                        Log.Warn($"areaportals: undone, VBSP failed: {LastLines(run)}");
+                        return false;
+                    }
+
+                    vis = BspVisibilityData.Load(compile.Bsp);
+                    var invalid = AreaportalSelection.Invalid(pass, vis);
+                    var invalidWindows = AreaportalSelection.InvalidWindows(pass, vis);
+                    if (invalid.Count == 0 && invalidWindows.Count == 0)
+                        return true;
+                    int dropped = pass.DropWithDependents(invalid, invalidWindows, "VBSP did not put it, or a window it needs, between two areas");
+                    Log.Info($"areaportals: round {round}: {invalid.Count + invalidWindows.Count} portal(s) do not divide two areas; {dropped} removed with those needing them");
+                    vis = null;
+                }
+                if (pass.Added.Count == 0)
+                    pass.RevertAll();
+                else if (stage == 2 && vis == null)
+                {
+                    pass.RevertAll("VBSP still would not place every portal of the chosen set, so the pass was undone");
+                    Log.Warn("areaportals: undone, the chosen set never compiled with every portal between two areas");
+                    return false;
+                }
+                return true;
+            }
+        }
+
+        private static double Distance(SourceKit.Geometry.Vec3 p, SourceKit.Geometry.Vec3 lo, SourceKit.Geometry.Vec3 hi)
+        {
+            double dx = Math.Max(0, Math.Max(lo.X - p.X, p.X - hi.X));
+            double dy = Math.Max(0, Math.Max(lo.Y - p.Y, p.Y - hi.Y));
+            double dz = Math.Max(0, Math.Max(lo.Z - p.Z, p.Z - hi.Z));
+            return Math.Sqrt(dx * dx + dy * dy + dz * dz);
         }
 
         private static double Distance(SourceKit.Geometry.Vec3 p, Doorway d)
