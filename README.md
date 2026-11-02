@@ -41,6 +41,17 @@ doors between the same two areas, and a door with the windows and doorways it ne
 doors need paid for once. The groups worth most per portal are kept, and that set is compiled again to
 prove it.
 
+**Window pictures** (`-windowpictures`, with `-areaportals`) makes a shut window show the room behind
+it instead of black. The room on one side - the more closed-in one, so a shop is seen from the street -
+is traced in the first compile and lined with a shell inside the window's stand-in: a back wall, side
+walls, floor and ceiling, each a few units behind the real surface it copies and cut into 32-unit cells
+so only cells with a wall behind them are kept, plus cards across the room's depth (up to eight, one
+per 128 units) for what stands in it. The faces look one way, into the room, and are drawn only while
+the window is shut, so the room keeps its depth as you walk past. A window whose room cannot be traced
+gets a flat picture on each side. Viswright writes a black placeholder material for every face into
+`materials/viswright/<map>/` and a `bake.json` saying where each is seen from; Compile Pal's **BAKE**
+step then draws the lit map into each picture after VRAD and packs them into the BSP.
+
 **Make detail** (`-detail`) turns small and complex world brushes into func_detail: trim, railings,
 pillars, stairs, frames. Left out: brushes that face the void (checked against the first compile),
 frame an areaportal, look into two different areas (they keep an areaportal's sides apart), are water,
@@ -365,7 +376,7 @@ compile that would go over.
 ## Commands
 
 ```
-viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N] [-areaportals]
+viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N] [-areaportals [-windowpictures]]
                    [-detail] [-nodraw] [-fades [-fadepixels N]] [-slim [-luapath <folder>]...]
                    [-hints [-hinttime M]] [-blocksize N] [-review] [-mode auto|review|pinned] [-accept]
                    [-cpu] -vbsp <exe> -vvis <exe> -game <folder>

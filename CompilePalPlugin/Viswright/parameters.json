@@ -6,6 +6,12 @@
     "Warning": "Adds names to doors that had none. Lua that finds doors by having no name would see them differently."
   },
   {
+    "Name": "Window pictures",
+    "Parameter": " -windowpictures",
+    "Description": "With areaportals in doorways: a window shut by distance shows the room behind it instead of black. The room is lined with a shell of pictures - back wall, sides, floor, ceiling and slices of its depth - that Compile Pal's BAKE step draws from the lit map after VRAD and packs into the BSP. Add the BAKE step after VRAD, or the windows show black.",
+    "Warning": "Writes placeholder materials into the game's materials/viswright/<map> folder."
+  },
+  {
     "Name": "Make detail",
     "Parameter": " -detail",
     "Description": "Turn small and complex world brushes - trim, railings, pillars, stairs, frames - into func_detail, so they stop cutting the map into extra pieces for VVIS. Brushes that form the outside of the map, frame an areaportal, are water or are in a visgroup named viswright_ignore are never touched. Any brush a leak runs through goes back to being world, and the whole pass is undone if collision changes or more becomes visible."

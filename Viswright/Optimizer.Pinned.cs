@@ -52,7 +52,7 @@ namespace Viswright
             AreaportalPass? portalPass = null;
             if (options.Areaportals)
             {
-                portalPass = new AreaportalPass(working);
+                portalPass = new AreaportalPass(working) { Pictures = options.WindowPictures ? new WindowPictures(name, tools.GameFolder) : null };
                 var doors = working.Entities.Where(e => Audit.DoorClasses.Contains(e.Classname ?? "", StringComparer.OrdinalIgnoreCase)).ToList();
                 int existing = working.Entities.Count(e => Audit.PortalClasses.Contains(e.Classname ?? "", StringComparer.OrdinalIgnoreCase));
                 var doorways = new List<Doorway>();
@@ -78,7 +78,14 @@ namespace Viswright
                         doorways.Add(DecisionFile.Doorway(door, item.Data));
                 }
                 portalPass.Apply(doorways);
+                if (portalPass.Pictures != null)
+                {
+                    portalPass.Pictures.Space = BspSpace.Load(baseline.Bsp);
+                    var geometry = BspGeometry.Load(baseline.Bsp);
+                    portalPass.Pictures.Surfaces = (geometry, new SourceKit.Geometry.TriangleBvh(geometry.Corners, geometry.Blocks));
+                }
                 portalPass.ApplyWindows(windows);
+                portalPass.Pictures?.WriteBakeFile();
             }
 
             // Detail: the world brushes with the decided bounds.

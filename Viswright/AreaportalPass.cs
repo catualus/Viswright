@@ -619,7 +619,8 @@ namespace Viswright
         }
 
         /// <summary>Adds a box brush to <paramref name="entity"/>, each face's material chosen by the axis it faces along.</summary>
-        private static long AddBox(VmfNode entity, Vec3 lo, Vec3 hi, long id, Func<int, string> material)
+        /// <param name="axes">A face's texture axes by its index (top, bottom, -x, +x, +y, -y), where they are not the default.</param>
+        private static long AddBox(VmfNode entity, Vec3 lo, Vec3 hi, long id, Func<int, string> material, Func<int, (string U, string V)?>? axes = null)
         {
             string F(double v) => Invariant(Math.Round(v, 2));
             string P(Vec3 p) => $"({F(p.X)} {F(p.Y)} {F(p.Z)})";
@@ -637,15 +638,16 @@ namespace Viswright
             var solid = new VmfNode("solid");
             entity.Add(solid);
             solid.Set("id", Invariant(++id));
-            int[] faceAxis = [2, 2, 0, 0, 1, 1];
             for (int f = 0; f < sides.Length; f++)
             {
                 var (plane, u, v) = sides[f];
+                if (axes?.Invoke(f) is var (au, av))
+                    (u, v) = (au, av);
                 var side = new VmfNode("side");
                 solid.Add(side);
                 side.Set("id", Invariant(++id));
                 side.Set("plane", plane);
-                side.Set("material", material(faceAxis[f]));
+                side.Set("material", material(f));
                 side.Set("uaxis", u);
                 side.Set("vaxis", v);
                 side.Set("rotation", "0");

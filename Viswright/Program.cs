@@ -67,7 +67,7 @@ namespace Viswright
         private static int Optimize(string[] args)
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-review", "-cpu", "-mode", "-accept", "-vbsp", "-vvis", "-game" };
+                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-windowpictures", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-review", "-cpu", "-mode", "-accept", "-vbsp", "-vvis", "-game" };
             RefuseUnknownFlags(args, known);
 
             string input = Positional(args, 1) ?? throw new ArgumentException("optimize needs the VMF to read.");
@@ -93,6 +93,7 @@ namespace Viswright
                 Detail = HasFlag(args, "-detail"),
                 Nodraw = HasFlag(args, "-nodraw"),
                 Areaportals = HasFlag(args, "-areaportals"),
+                WindowPictures = HasFlag(args, "-windowpictures"),
                 Fades = HasFlag(args, "-fades"),
                 FadePixels = TryGetFlagValue(args, "-fadepixels", out string? pixels)
                     ? (double.TryParse(pixels, NumberStyles.Float, CultureInfo.InvariantCulture, out double p) && p >= 1 && p <= 64 ? p
@@ -398,7 +399,7 @@ namespace Viswright
                 viswright - automatic visibility optimisation for Source maps
 
                   viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N]
-                                     [-areaportals] [-detail] [-nodraw] [-fades [-fadepixels N]]
+                                     [-areaportals [-windowpictures]] [-detail] [-nodraw] [-fades [-fadepixels N]]
                                      [-slim [-luapath <folder>]...] [-hints [-hinttime M]] [-blocksize N] [-mode auto|review|pinned] [-accept]
                                      -vbsp <exe> -vvis <exe> -game <folder>
                       Optimise a copy of the map and hand it to the rest of the compile. The map

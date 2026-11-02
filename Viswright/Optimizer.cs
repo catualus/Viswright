@@ -30,6 +30,9 @@ namespace Viswright
         /// <summary>Pass C: put an areaportal in the doorway of each door that has none.</summary>
         public bool Areaportals { get; init; }
 
+        /// <summary>Window stand-ins show a picture of what the window looks out on, baked by Compile Pal's BAKE step, instead of black.</summary>
+        public bool WindowPictures { get; init; }
+
         /// <summary>Pass E: give static props with no fade one, where they shrink to <see cref="FadePixels"/> pixels.</summary>
         public bool Fades { get; init; }
 
@@ -223,7 +226,7 @@ namespace Viswright
             if (options.Areaportals)
             {
                 portals = RunAreaportals(working, copy, Path.Combine(work, "areaportals"), name, tools, baseline, samples, collision, content, guard,
-                    review, out var portalCompile);
+                    review, options.WindowPictures ? new WindowPictures(name, tools.GameFolder) : null, out var portalCompile);
                 if (portalCompile is { VvisRun.Succeeded: true })
                 {
                     reference = lastVis = latest = portalCompile;
@@ -819,9 +822,9 @@ namespace Viswright
         /// </summary>
         private static int RunAreaportals(VmfDocument working, string copy, string folder, string name, Toolchain tools,
             WorkCompile baseline, SamplePoints samples, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard,
-            ReviewLog review, out WorkCompile? final)
+            ReviewLog review, WindowPictures? pictures, out WorkCompile? final)
         {
-            var pass = new AreaportalPass(working);
+            var pass = new AreaportalPass(working) { Pictures = pictures };
             int added = RunAreaportals(pass, working, copy, folder, name, tools, baseline, samples, collision, content, guard, out final);
 
             static string DoorKey(VmfNode door) => door.Get("targetname") is { Length: > 0 } n && !n.StartsWith(AreaportalPass.DoorNamePrefix, StringComparison.Ordinal)
@@ -918,6 +921,12 @@ namespace Viswright
                 return 0;
 
             pass.Apply(doorways);
+            if (pass.Pictures != null)
+            {
+                pass.Pictures.Space = space;
+                var geometry = BspGeometry.Load(baseline.Bsp);
+                pass.Pictures.Surfaces = (geometry, new SourceKit.Geometry.TriangleBvh(geometry.Corners, geometry.Blocks));
+            }
             pass.ApplyWindows(pass.Windows);
 
             WorkCompile? compile = null;
@@ -996,6 +1005,11 @@ namespace Viswright
             }
 
             pass.Declare(guard);
+            if (pass.Pictures != null && pass.AddedWindows.Any(a => a.StandIn != null))
+            {
+                pass.Pictures.WriteBakeFile();
+                Log.Info($"areaportals: shut windows show pictures of the rooms behind them; Compile Pal's BAKE step draws them once the map is lit");
+            }
             int closing = pass.Added.Count(a => a.Doorway.Closes);
             int named = pass.Added.Count(a => a.NamedDoor);
             int fading = pass.AddedWindows.Count(a => !a.Window.Passage);

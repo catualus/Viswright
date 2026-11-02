@@ -34,6 +34,15 @@ namespace Viswright
 
         private readonly List<(VmfNode Portal, Window Window, VmfNode? StandIn)> addedWindows = [];
 
+        /// <summary>Every brush of each window's stand-in and room shell, which never collide in game.</summary>
+        private readonly Dictionary<Window, List<(Vec3 Lo, Vec3 Hi)>> standInBoxes = new();
+
+        /// <summary>
+        /// When set, a stand-in's two broad faces each get a material of their own for Compile Pal's
+        /// BAKE step to draw what the window looks out on into, instead of plain black.
+        /// </summary>
+        public WindowPictures? Pictures { get; set; }
+
         /// <summary>The window portals placed, each with the brush drawn in its place while it is shut (none for a passage).</summary>
         public IReadOnlyList<(VmfNode Portal, Window Window, VmfNode? StandIn)> AddedWindows => addedWindows;
 
@@ -269,7 +278,45 @@ namespace Viswright
                     // drawn: so it stands a unit proud of the wall on both sides, in the leaves either
                     // side of the portal, black on its two broad faces.
                     var (lo, hi) = StandInBox(w);
-                    id = AddBox(standIn, lo, hi, id, axis => axis == w.NormalAxis ? StandInMaterial : "TOOLS/TOOLSNODRAW");
+                    // faces 2 and 3 look along -x and +x, 5 and 4 along -y and +y
+                    int low = w.NormalAxis == 0 ? 2 : 5, high = w.NormalAxis == 0 ? 3 : 4;
+                    standInBoxes[w] = [(lo, hi)];
+                    if (Pictures is { } pictures)
+                    {
+                        // The room behind, as a shell with its contents in slices, on one side only. The
+                        // window takes its stand-in's model and measures how far away it is to that, so a
+                        // stand-in reaching into the rooms on both sides would never be far from anyone.
+                        // Reaching into one, it fades by distance for everyone on the other side; inside the
+                        // room the window simply stays open, and the street through it is the real one.
+                        var lowShell = pictures.Shell(w, high: false);
+                        var highShell = pictures.Shell(w, high: true);
+                        // the side that is most a room - walled, floored and roofed - rather than a street
+                        int lowWalls = Enclosed(lowShell), highWalls = Enclosed(highShell);
+                        bool useLow = lowShell.Count > 0 && (highShell.Count == 0 || lowWalls > highWalls
+                            || (lowWalls == highWalls && Volume(lowShell) <= Volume(highShell)));
+                        var shell = useLow ? lowShell : highShell;
+                        if (shell.Count > 0)
+                        {
+                            // the face the room is seen through carries what is in the opening itself
+                            int viewer = useLow ? low : high;
+                            var (frontName, frontAxes) = pictures.Front(w, lo, hi, high: !useLow);
+                            id = AddBox(standIn, lo, hi, id, f => f == viewer ? frontName : "TOOLS/TOOLSNODRAW", f => f == viewer ? frontAxes : null);
+                            foreach (var b in shell)
+                            {
+                                id = AddBox(standIn, b.Lo, b.Hi, id, f => f == b.Face ? b.Material : "TOOLS/TOOLSNODRAW", f => f == b.Face ? b.Axes : null);
+                                standInBoxes[w].Add((b.Lo, b.Hi));
+                            }
+                        }
+                        else
+                        {
+                            var (lowName, lowAxes) = pictures.Face(w, lo, hi, high: false);
+                            var (highName, highAxes) = pictures.Face(w, lo, hi, high: true);
+                            id = AddBox(standIn, lo, hi, id, f => f == low ? lowName : f == high ? highName : "TOOLS/TOOLSNODRAW",
+                                f => f == low ? lowAxes : f == high ? highAxes : null);
+                        }
+                    }
+                    else
+                        id = AddBox(standIn, lo, hi, id, f => f == low || f == high ? StandInMaterial : "TOOLS/TOOLSNODRAW");
 
                     portal.Set("classname", "func_areaportalwindow");
                     portal.Set("targetname", name);
@@ -338,13 +385,26 @@ namespace Viswright
                 addedWindows.Where(a => Named(a.Portal)).Select(a => a.Window).ToHashSet());
         }
 
+        /// <summary>How many of a room's surfaces a shell has besides its back: sides, floor and ceiling.</summary>
+        private static int Enclosed(List<WindowPictures.Brush> shell) => shell
+            .Select(b => b.Material[(b.Material.LastIndexOf('_') + 1)..])
+            .Where(part => part is "left" or "right" or "floor" or "ceiling").Distinct().Count();
+
+        private static double Volume(List<WindowPictures.Brush> shell)
+        {
+            var lo = shell.Select(b => b.Lo).Aggregate(Vec3.Min);
+            var hi = shell.Select(b => b.Hi).Aggregate(Vec3.Max);
+            var size = hi - lo;
+            return size.X * size.Y * size.Z;
+        }
+
         /// <summary>The windows the doorways in <paramref name="doorways"/> need, each once.</summary>
         public HashSet<Window> WindowsNeededBy(IEnumerable<Doorway> doorways) =>
             doorways.SelectMany(d => Rescued.TryGetValue(d, out var r) ? r.Windows : []).ToHashSet();
 
         /// <summary>Whether a collision brush is one of the window stand-ins, which never collide in game.</summary>
         public bool IsStandIn(BspSpace.BrushShape shape) =>
-            addedWindows.Any(a => a.StandIn != null && Close(StandInBox(a.Window), shape));
+            addedWindows.Any(a => a.StandIn != null && standInBoxes.TryGetValue(a.Window, out var boxes) && boxes.Any(b => Close(b, shape)));
 
         private static (Vec3 Mins, Vec3 Maxs) StandInBox(Window w) => w.NormalAxis == 0
             ? (w.Mins with { X = w.Mins.X - 1 }, w.Maxs with { X = w.Maxs.X + 1 })
