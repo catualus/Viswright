@@ -473,9 +473,50 @@ namespace Viswright
                 openOnly = "the door can be seen through, or its materials were not found";
             bool startOpen = StartsOpen(door);
 
+            // A portal that closes with its door lies inside the door, so the door reaches into the areas
+            // on both sides: the engine draws a door from an area only if the door is in it, and a door
+            // wholly inside the portal belongs to one side alone and vanishes from the other once shut.
+            bool closes = covers && opaque;
+            if (closes)
+            {
+                if (InsideDoor(a0, a1, mins[normal], maxs[normal]) is { } inside)
+                    (a0, a1) = inside;
+                else
+                {
+                    closes = false;
+                    openOnly = TooThin;
+                }
+            }
+
             // One unit into the frame on every side, so the seal does not depend on an exact edge.
             return new Doorway(door, normal, a0, a1, w0.Value - 1, w1.Value + 1, z0.Value - 1, z1.Value + 1,
-                Closes: covers && opaque, StartOpen: startOpen, WallA0: aLo, WallA1: aHi);
+                Closes: closes, StartOpen: startOpen, WallA0: aLo, WallA1: aHi);
+        }
+
+        private const string TooThin = "the door is too thin, or too far from the wall's middle, for a portal inside it";
+
+        /// <summary>
+        /// The part of the slab <paramref name="a0"/>..<paramref name="a1"/> half a unit inside a door
+        /// running <paramref name="lo"/>..<paramref name="hi"/> through the wall, on the half-unit grid;
+        /// null when that is under a unit thick.
+        /// </summary>
+        private static (double A0, double A1)? InsideDoor(double a0, double a1, double lo, double hi)
+        {
+            double d0 = Math.Ceiling(Math.Max(a0, lo + 0.5) * 2) / 2, d1 = Math.Floor(Math.Min(a1, hi - 0.5) * 2) / 2;
+            return d1 - d0 < 1 ? null : (d0, d1);
+        }
+
+        /// <summary>
+        /// A doorway decided earlier, its closing portal moved inside its door as <see cref="Find"/> now
+        /// places it: decisions written before then put some portals round thin doors instead.
+        /// </summary>
+        internal static Doorway Seated(Doorway d, GameContent content)
+        {
+            if (!d.Closes || DoorBox(d.Door, content, out _, out _) is not { } box)
+                return d;
+            return InsideDoor(d.A0, d.A1, box.Mins[d.NormalAxis], box.Maxs[d.NormalAxis]) is { } inside
+                ? d with { A0 = inside.A0, A1 = inside.A1 }
+                : d with { Closes = false };
         }
 
         /// <summary>The door's box in its closed position, as placed.</summary>

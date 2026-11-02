@@ -57,6 +57,7 @@ namespace Viswright
                 int existing = working.Entities.Count(e => Audit.PortalClasses.Contains(e.Classname ?? "", StringComparer.OrdinalIgnoreCase));
                 var doorways = new List<Doorway>();
                 var windows = new List<Window>();
+                var doorContent = GameContent.Open(tools.GameFolder);
                 foreach (var item in accepted.Where(i => i.Pass == "areaportals"))
                 {
                     if (item.Id.StartsWith("window:", StringComparison.Ordinal))
@@ -75,7 +76,7 @@ namespace Viswright
                     else if (existing + doorways.Count + windows.Count >= Audit.PortalBudget)
                         left.Add((item.Id, $"Garry's Mod's {Audit.PortalBudget} areaportals are used up"));
                     else
-                        doorways.Add(DecisionFile.Doorway(door, item.Data));
+                        doorways.Add(AreaportalPass.Seated(DecisionFile.Doorway(door, item.Data), doorContent));
                 }
                 portalPass.Apply(doorways);
                 if (portalPass.Pictures != null)

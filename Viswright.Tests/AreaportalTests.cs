@@ -51,7 +51,7 @@ namespace Viswright.Tests
         /// func_door filling the doorway. <paramref name="window"/> also cuts an open hole in the wall,
         /// which joins the rooms into one area whatever the door does.
         /// </summary>
-        internal static string TwoRooms(bool window = false)
+        internal static string TwoRooms(bool window = false, double door0 = 252, double door1 = 260)
         {
             var world = new StringBuilder();
             world.Append(Box(0, 0, 0, 512, 256, 16));        // floor
@@ -72,7 +72,7 @@ namespace Viswright.Tests
                 world.Append(Box(248, 96, 112, 264, 160, 240));
 
             string door = "entity\r\n{\r\n\t\"id\" \"50\"\r\n\t\"classname\" \"func_door\"\r\n\t\"spawnflags\" \"0\"\r\n" +
-                Box(252, 96, 16, 260, 160, 112) + "}\r\n";
+                Box(door0, 96, 16, door1, 160, 112) + "}\r\n";
             string start = "entity\r\n{\r\n\t\"id\" \"51\"\r\n\t\"classname\" \"info_player_start\"\r\n\t\"origin\" \"128 128 32\"\r\n}\r\n";
             string light = "entity\r\n{\r\n\t\"id\" \"52\"\r\n\t\"classname\" \"light\"\r\n\t\"origin\" \"384 128 128\"\r\n}\r\n";
             return "versioninfo\r\n{\r\n\t\"editorversion\" \"400\"\r\n}\r\nworld\r\n{\r\n\t\"id\" \"1\"\r\n\t\"classname\" \"worldspawn\"\r\n" +
@@ -102,6 +102,27 @@ namespace Viswright.Tests
             var brush = VmfBrush.Build(portal.Child("solid")!)!;
             Assert.Equal(new SourceKit.Geometry.Vec3(254, 95, 15), brush.Mins);
             Assert.Equal(new SourceKit.Geometry.Vec3(258, 161, 113), brush.Maxs);
+        }
+
+        [Fact]
+        public void APortalLiesInsideAThinDoorSoTheDoorIsSeenFromBothSides()
+        {
+            var tools = Tools();
+            if (tools == null)
+                return;
+            using var ws = new Workspace();
+            // a 2-unit door against one face of the wall, as a roll-up door often is
+            string map = ws.Write(@"maps\vw_thindoor.vmf", TwoRooms(door0: 249, door1: 251));
+
+            var result = Optimizer.Run(new OptimizeOptions { Input = map, Areaportals = true, Tools = tools });
+
+            Assert.Equal(1, result.Portals);
+            var copy = VmfDocument.Load(result.CopyPath!);
+            var portal = Assert.Single(copy.Entities, e => e.Classname == "func_areaportal");
+            Assert.Equal("0", portal.Get("StartOpen"));
+            var brush = VmfBrush.Build(portal.Child("solid")!)!;
+            Assert.Equal(249.5, brush.Mins.X);
+            Assert.Equal(250.5, brush.Maxs.X);
         }
 
         [Fact]
