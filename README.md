@@ -392,8 +392,9 @@ viswright status <map.vmf>
 
 ## Requirements
 
-- The Compile Pal fork from the version that lets a step hand VBSP a different VMF (`$sourceVmf$`
-  and a live `COMPILE_PAL_SET file`).
+- [Compile Pal fork](https://github.com/catualus/CompilePal) 1.3.0 or later: it lets a step hand VBSP
+  a different VMF (`$sourceVmf$` and a live `COMPILE_PAL_SET file`), shows Viswright's review in the
+  map preview, and has the BAKE step that Window pictures need.
 - Garry's Mod for the first release.
 
 ## Building
