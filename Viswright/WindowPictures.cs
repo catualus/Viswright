@@ -30,6 +30,11 @@ namespace Viswright
     /// Only one side of a window gets a shell, the room more closed in; a window whose room cannot
     /// be traced, or whose back wall is mostly open, gets one flat picture on each side instead.
     ///
+    /// The slices look along the window's normal, so a surface running into the room - a mezzanine
+    /// floor, a walkway, the side of a partition - is edge on to all of them and lost. The room's
+    /// largest flat surfaces each get a card of their own instead, where they are, drawn looking
+    /// straight at them, and the slices leave them out.
+    ///
     /// Every face gets a material of its own, <c>viswright/&lt;map&gt;/w_&lt;where&gt;_&lt;side&gt;_&lt;part&gt;</c>,
     /// its texture laid exactly across it at half a texel a unit, and a black placeholder of that size
     /// is written into the game's materials for VBSP. <c>bake.json</c> beside them tells BAKE where
@@ -41,7 +46,12 @@ namespace Viswright
         public sealed record Brush(Vec3 Lo, Vec3 Hi, int Face, string Material, (string U, string V) Axes);
 
         private sealed record BakeEntry(string Material, Vec3 Eye, Vec3 ClipNormal, double ClipDistance, bool Square = false,
-            double? FarDistance = null, bool Alpha = false);
+            double? FarDistance = null, bool Alpha = false, IReadOnlyList<(int Axis, double At)>? Skip = null, bool Translucent = false);
+
+        /// <summary>A world triangle lying flat on an axis plane: the plane, the way it faces, its area and extent.</summary>
+        private readonly record struct Flat(int Axis, int Sign, double At, double Area, Vec3 Min, Vec3 Max);
+
+        private List<Flat>? flats;
 
         private readonly HashSet<string> written = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<BakeEntry> entries = [];
@@ -53,6 +63,10 @@ namespace Viswright
 
         /// <summary>The most slices a room's depth is cut into.</summary>
         private const int MaxSlices = 8;
+
+        /// <summary>The most surface cards a room gets, and the least area a surface needs for one.</summary>
+        private const int MaxCards = 6;
+        private const double MinCardArea = 64 * 64;
 
         public string Map { get; } = map.ToLowerInvariant();
 
@@ -121,6 +135,24 @@ namespace Viswright
                 return brushes;
             int backFace = r > 0 ? (a == 0 ? 2 : 5) : (a == 0 ? 3 : 4);
 
+            // the room's large flat surfaces inside the box, each a card where it is
+            var room = Box(At(far, l0, z0), At(back, l1, z1));
+            var cards = Cards(room, a, r);
+            var skip = cards.Select(k => (k.Axis, k.At)).ToList();
+            for (int k = 0; k < cards.Count; k++)
+            {
+                var (axis, sign, at, lo, hi) = cards[k];
+                int face = axis == 2 ? (sign > 0 ? 0 : 1) : axis == 0 ? (sign > 0 ? 3 : 2) : (sign > 0 ? 4 : 5);
+                string name = Name($"card{k}");
+                var axes = Axes(face, lo, hi, out int w, out int h, density: 0.5);
+                Placeholder(name, w, h);
+                var n = axis == 0 ? new Vec3(sign, 0, 0) : axis == 1 ? new Vec3(0, sign, 0) : new Vec3(0, 0, sign);
+                // looking straight at the surface: what lies from 8 units in front of it to 4 behind
+                entries.Add(new BakeEntry(name, (lo + hi) / 2 + n * EyeDistance, -n, -sign * at - 8, Square: true,
+                    FarDistance: -sign * at + 4, Alpha: true));
+                brushes.Add(new Brush(lo, hi, face, name, axes));
+            }
+
             // What stands in the room - partitions, doors, props - in slices of its depth: a card at the
             // front of each slice, showing what is in the slice and see-through where nothing is, so
             // nearer things slide over farther ones as the room would. The back shows what lies beyond.
@@ -134,13 +166,13 @@ namespace Viswright
                 var axes = Axes(backFace, card.Lo, card.Hi, out int w, out int h, density: 0.5);
                 Placeholder(name, w, h);
                 entries.Add(new BakeEntry(name, eye, normal, normal.Dot(At(far + r * (k * step + 1), centre[c], centre.Z)), Square: true,
-                    FarDistance: normal.Dot(At(far + r * ((k + 1) * step + 2), centre[c], centre.Z)), Alpha: true));
+                    FarDistance: normal.Dot(At(far + r * ((k + 1) * step + 2), centre[c], centre.Z)), Alpha: true, Skip: skip));
                 brushes.Add(new Brush(card.Lo, card.Hi, backFace, name, axes));
             }
             // drawn from where the last slice ends; from the window's own plane the parallel rays would
             // meet the inside of the front wall all round the window, and show the room turned round
             double beyond = normal.Dot(At(far + r * (slices * step + 1), centre[c], centre.Z));
-            brushes.AddRange(Make(bf, backFace, Name("back"), eye, normal, beyond, square: true));
+            brushes.AddRange(Make(bf, backFace, Name("back"), eye, normal, beyond, square: true, skip));
 
             // the sides, floor and ceiling that have a wall to hide in
             void Add(string part, int axis, int sign, double at, int face, bool traced)
@@ -258,6 +290,67 @@ namespace Viswright
             return new Placed(whole, pieces, (double)count / (cols * rows));
         }
 
+        /// <summary>
+        /// The largest flat surfaces well inside <paramref name="room"/>, by plane, each as a card a unit
+        /// in front of it over the part of the plane it covers. A surface square to the window counts
+        /// only if it faces the window; the walls, floor and ceiling the shell already copies are left out.
+        /// </summary>
+        private List<(int Axis, int Sign, double At, Vec3 Lo, Vec3 Hi)> Cards((Vec3 Lo, Vec3 Hi) room, int a, int r)
+        {
+            const double Inset = 24;
+            var inner = (Lo: room.Lo + new Vec3(Inset, Inset, Inset), Hi: room.Hi - new Vec3(Inset, Inset, Inset));
+            var planes = new Dictionary<(int Axis, int Sign, double At), (double Area, Vec3 Min, Vec3 Max)>();
+            foreach (var f in Flats())
+            {
+                var mid = (f.Min + f.Max) / 2;
+                if (mid.X < inner.Lo.X || mid.Y < inner.Lo.Y || mid.Z < inner.Lo.Z || mid.X > inner.Hi.X || mid.Y > inner.Hi.Y || mid.Z > inner.Hi.Z)
+                    continue;
+                if (f.Axis == a && f.Sign != -r)
+                    continue;
+                var key = (f.Axis, f.Sign, f.At);
+                planes[key] = planes.TryGetValue(key, out var p) ? (p.Area + f.Area, Vec3.Min(p.Min, f.Min), Vec3.Max(p.Max, f.Max)) : (f.Area, f.Min, f.Max);
+            }
+            var lo = room.Lo + new Vec3(Margin, Margin, Margin);
+            var hi = room.Hi - new Vec3(Margin, Margin, Margin);
+            return planes.Where(p => p.Value.Area >= MinCardArea).OrderByDescending(p => p.Value.Area).Take(MaxCards)
+                .Select(p =>
+                {
+                    var (axis, sign, at) = p.Key;
+                    var cardLo = Vec3.Max(p.Value.Min - new Vec3(2, 2, 2), lo);
+                    var cardHi = Vec3.Min(p.Value.Max + new Vec3(2, 2, 2), hi);
+                    double near = at + sign * 1, outer = at + sign * 2;
+                    return (axis, sign, at, With(cardLo, axis, Math.Min(near, outer)), With(cardHi, axis, Math.Max(near, outer)));
+                })
+                .ToList();
+        }
+
+        /// <summary>The first compile's world triangles that lie flat on an axis plane, read once.</summary>
+        private List<Flat> Flats()
+        {
+            if (flats != null)
+                return flats;
+            flats = [];
+            if (Surfaces is not { } surfaces)
+                return flats;
+            var g = surfaces.Geometry;
+            for (int t = 0; t < g.TriangleCount; t++)
+            {
+                if (g.Sky[t])
+                    continue;
+                Vec3 p = g.Corners[t * 3], q = g.Corners[t * 3 + 1], s = g.Corners[t * 3 + 2];
+                var n = (s - p).Cross(q - p);    // faces are wound clockwise seen from in front
+                double area = n.Length / 2;
+                if (area < 1)
+                    continue;
+                n /= 2 * area;
+                int axis = Math.Abs(n.X) > 0.999 ? 0 : Math.Abs(n.Y) > 0.999 ? 1 : Math.Abs(n.Z) > 0.999 ? 2 : -1;
+                if (axis < 0)
+                    continue;
+                flats.Add(new Flat(axis, n[axis] > 0 ? 1 : -1, Math.Round(p[axis]), area, Vec3.Min(Vec3.Min(p, q), s), Vec3.Max(Vec3.Max(p, q), s)));
+            }
+            return flats;
+        }
+
         private static (Vec3 Lo, Vec3 Hi) Box(Vec3 p, Vec3 q) => (Vec3.Min(p, q), Vec3.Max(p, q));
 
         private static Vec3 With(Vec3 p, int axis, double value) => axis switch
@@ -268,11 +361,12 @@ namespace Viswright
         };
 
         /// <summary>The brushes of one placed face: its texture laid across the whole face, so the pieces join up.</summary>
-        private List<Brush> Make(Placed placed, int face, string name, Vec3 eye, Vec3 normal, double clip, bool square)
+        private List<Brush> Make(Placed placed, int face, string name, Vec3 eye, Vec3 normal, double clip, bool square,
+            IReadOnlyList<(int Axis, double At)>? skip = null)
         {
             var axes = Axes(face, placed.Whole.Lo, placed.Whole.Hi, out int w, out int h, density: 0.5);
             Placeholder(name, w, h);
-            entries.Add(new BakeEntry(name, eye, normal, clip, square));
+            entries.Add(new BakeEntry(name, eye, normal, clip, square, Skip: skip));
             return placed.Pieces.Select(p => new Brush(p.Lo, p.Hi, face, name, axes)).ToList();
         }
 
@@ -292,7 +386,7 @@ namespace Viswright
             var normal = a == 0 ? new Vec3(r, 0, 0) : new Vec3(0, r, 0);
             // from the viewer's face of the wall to a unit past its other face
             double near = r > 0 ? window.Mins[a] : -window.Maxs[a], beyond = r > 0 ? window.Maxs[a] + 1 : -(window.Mins[a] - 1);
-            entries.Add(new BakeEntry(name, window.Centre - normal * 1500, normal, near, Square: true, FarDistance: beyond, Alpha: true));
+            entries.Add(new BakeEntry(name, window.Centre - normal * 1500, normal, near, Square: true, FarDistance: beyond, Translucent: true));
             return (name, axes);
         }
 
@@ -351,7 +445,9 @@ namespace Viswright
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllBytes(path + ".vtf", PlaceholderVtf(w, h));
             // a slice is cut out where nothing is; its placeholder is all cut out
-            string alpha = name.Contains("_slice", StringComparison.Ordinal) || name.EndsWith("_front", StringComparison.Ordinal) ? "\t\"$alphatest\" \"1\"\r\n" : "";
+            // what is in a window's opening is translucent by degrees, as glass is
+            string alpha = name.EndsWith("_front", StringComparison.Ordinal) ? "\t\"$translucent\" \"1\"\r\n"
+                : name.Contains("_slice", StringComparison.Ordinal) || name.Contains("_card", StringComparison.Ordinal) ? "\t\"$alphatest\" \"1\"\r\n" : "";
             File.WriteAllText(path + ".vmt", "\"UnlitGeneric\"\r\n{\r\n\t\"$basetexture\" \"" + name + "\"\r\n" + alpha + "\t\"%keywords\" \"viswright\"\r\n}\r\n");
         }
 
@@ -383,6 +479,22 @@ namespace Viswright
                     json.WriteNumber("far", farDistance);
                 if (e.Alpha)
                     json.WriteBoolean("alpha", true);
+                // see-through by degrees, glass and all
+                if (e.Translucent)
+                    json.WriteBoolean("translucent", true);
+                // planes a card shows, left out of this picture
+                if (e.Skip is { Count: > 0 } skip)
+                {
+                    json.WriteStartArray("skip");
+                    foreach (var (axis, at) in skip)
+                    {
+                        json.WriteStartArray();
+                        json.WriteNumberValue(axis);
+                        json.WriteNumberValue(at);
+                        json.WriteEndArray();
+                    }
+                    json.WriteEndArray();
+                }
                 json.WriteEndObject();
             }
             json.WriteEndArray();

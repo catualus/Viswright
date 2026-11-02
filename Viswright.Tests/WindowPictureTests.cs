@@ -46,7 +46,7 @@ namespace Viswright.Tests
                 Assert.StartsWith("[0 0 -1 ", axes.V);
                 string vmt = File.ReadAllText(Path.Combine(game, "materials", name + ".vmt"));
                 Assert.Contains("\"UnlitGeneric\"", vmt);
-                Assert.Contains("\"$alphatest\" \"1\"", vmt);
+                Assert.Contains("\"$translucent\" \"1\"", vmt);
                 // 64 by 32 units at a texel a unit
                 var vtf = File.ReadAllBytes(Path.Combine(game, "materials", name + ".vtf"));
                 Assert.Equal(64, BitConverter.ToUInt16(vtf, 16));
@@ -56,7 +56,7 @@ namespace Viswright.Tests
                 var face = Assert.Single(bake.RootElement.GetProperty("faces").EnumerateArray());
                 Assert.Equal(name, face.GetProperty("material").GetString());
                 Assert.True(face.GetProperty("square").GetBoolean());
-                Assert.True(face.GetProperty("alpha").GetBoolean());
+                Assert.True(face.GetProperty("translucent").GetBoolean());
                 // seen looking along +x: from the wall's near face to a unit past its far face
                 var clip = face.GetProperty("clip").EnumerateArray().Select(e => e.GetDouble()).ToArray();
                 Assert.Equal([1, 0, 0, 248], clip);
@@ -98,6 +98,52 @@ namespace Viswright.Tests
         }
 
         [Fact]
+        public void AMezzanineGetsACardOfItsOwnThatTheSlicesLeaveOut()
+        {
+            var tools = AreaportalTests.Tools();
+            if (tools == null)
+                return;
+            using var ws = new Workspace();
+            // walkways half way up each room's sides, edge on to anything drawn along the window's normal
+            string mezzanines = string.Concat(new[] { 20.0, 176.0 }.SelectMany(y => new[]
+                { AreaportalTests.Box(20, y, 130, 240, y + 60, 136), AreaportalTests.Box(272, y, 130, 492, y + 60, 136) }));
+            string map = ws.Write(@"maps\vw_wincard.vmf", AreaportalTests.TwoRooms(window: true, extra: mezzanines));
+            string folder = Path.Combine(tools.GameFolder, "materials", "viswright", "vw_wincard");
+            try
+            {
+                var result = Optimizer.Run(new OptimizeOptions { Input = map, Areaportals = true, WindowPictures = true, Tools = tools });
+
+                var copy = VmfDocument.Load(result.CopyPath!);
+                var standIn = Assert.Single(copy.Entities, e => e.Classname == "func_brush");
+                var materials = standIn.Descendants().Select(n => n.Get("material")).Where(m => m != null).Distinct().ToList();
+                using var bake = JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, "bake.json")));
+                var faces = bake.RootElement.GetProperty("faces").EnumerateArray()
+                    .ToDictionary(f => f.GetProperty("material").GetString()!, f => f);
+
+                // the mezzanine's top, seen from above: from 8 units over it to 4 under
+                var cards = materials.Where(m => m!.Contains("_card")).Select(m => faces[m!]).ToList();
+                Assert.Contains(cards, c =>
+                {
+                    var clip = c.GetProperty("clip").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+                    return clip[2] == -1 && clip[3] == -136 - 8 && c.GetProperty("far").GetDouble() == -136 + 4 && c.GetProperty("alpha").GetBoolean();
+                });
+                // and the slices leave its plane to the card
+                var slice = Assert.Single(materials, m => m!.EndsWith("_slice0"));
+                var skip = faces[slice!].GetProperty("skip").EnumerateArray().Select(p => (p[0].GetInt32(), p[1].GetDouble())).ToList();
+                Assert.Contains((2, 136.0), skip);
+                // the opening's glass is kept as glass
+                string front = materials.Single(m => m!.EndsWith("_front"))!;
+                Assert.True(faces[front].GetProperty("translucent").GetBoolean());
+                Assert.Contains("$translucent", File.ReadAllText(Path.Combine(tools.GameFolder, "materials", front + ".vmt")));
+            }
+            finally
+            {
+                if (Directory.Exists(folder))
+                    Directory.Delete(folder, recursive: true);
+            }
+        }
+
+        [Fact]
         public void AShutWindowShowsAShellOfTheRoomBehindIt()
         {
             var tools = AreaportalTests.Tools();
@@ -132,9 +178,10 @@ namespace Viswright.Tests
                 }
                 foreach (var (name, face) in faces)
                 {
-                    bool cut = name.Contains("_slice") || name.EndsWith("_front");
+                    bool cut = name.Contains("_slice") || name.Contains("_card");
                     Assert.Equal(cut, face.TryGetProperty("alpha", out var alpha) && alpha.GetBoolean());
-                    Assert.Equal(cut, face.TryGetProperty("far", out _));
+                    Assert.Equal(cut || name.EndsWith("_front"), face.TryGetProperty("far", out _));
+                    Assert.Equal(name.EndsWith("_front"), face.TryGetProperty("translucent", out _));
                 }
             }
             finally
