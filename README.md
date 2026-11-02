@@ -171,6 +171,7 @@ With **Write a review** (`-review`), a run writes a `review` folder beside the c
   Markers and heatmap start hidden, and VBSP leaves hidden objects out, so the file still compiles to the optimised map. The camera list has one camera per top item, taken from each pass in turn, for the Camera tool to step through.
 - Plans of each floor, drawn from the BSP: walls, detail, indoor and outdoor floor, each item outlined (applied solid, refused faint), and what is visible from each standing place before and after, and the change.
 - A picture of each top item, `items.json`, and `review.html`, which puts them together with the reason for every item and a `setpos` to go and look in game.
+- `viswright_tour.lua`, the same top items as a tour in Garry's Mod: copy it to `garrysmod/lua`, load the compiled map on a listen server with `sv_cheats 1`, run `lua_openscript_cl viswright_tour.lua`, then `viswright_next`, `viswright_prev` or `viswright_go N` to stand where each item is seen from, its reason on screen.
 
 `viswright render <map.bsp> [-vmf <map.vmf>] [-from x,y,z] [-slack]` draws the plans of any compiled map,
 or with `-from`, what that spot's PVS lets it see.
@@ -274,6 +275,9 @@ would apply, waiting for a decision. The compile itself uses the map as it is.
 
 Decide the items any of three ways:
 
+- in Compile Pal's map preview, which draws the review over the compiled map: the panel lists every
+  item with its reason and pictures, a click flies the camera to it (a refused doorway's leak in red),
+  and **Accept** or **Deny** writes the decision straight into `<map>.viswright.json`;
 - edit `<map>.viswright.json`: set an item's `decision` to `accept` or `deny`;
 - in Hammer++, in the review VMF: delete an applied change you do not want, move or resize a hint or
   areaportal brush to where you want it, or put a refused item's marker into **Viswright/Accept**, and

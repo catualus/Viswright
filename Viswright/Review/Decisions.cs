@@ -38,6 +38,9 @@ namespace Viswright.Review
         public const int Version = 1;
 
         public string Path { get; }
+
+        /// <summary>The folder the last review was written to, for Compile Pal's preview to find its items and pictures.</summary>
+        public string? ReviewFolder { get; set; }
         public List<DecidedItem> Items { get; } = [];
 
         private DecisionFile(string path) => Path = path;
@@ -58,6 +61,8 @@ namespace Viswright.Review
             if (!File.Exists(path))
                 return file;
             using var json = JsonDocument.Parse(File.ReadAllBytes(path));
+            if (json.RootElement.TryGetProperty("review", out var review))
+                file.ReviewFolder = review.GetString();
             if (!json.RootElement.TryGetProperty("items", out var items))
                 return file;
             foreach (var e in items.EnumerateArray())
@@ -151,6 +156,8 @@ namespace Viswright.Review
             json.WriteStartObject();
             json.WriteNumber("version", Version);
             json.WriteString("about", "Viswright's items for this map. Set decision to accept or deny; a pinned compile applies the accepted ones and nothing else.");
+            if (ReviewFolder != null)
+                json.WriteString("review", ReviewFolder);
             json.WriteStartArray("items");
             foreach (var item in Items.OrderBy(i => Array.IndexOf(ReviewLog.PassOrder, i.Pass)).ThenBy(i => i.Id, StringComparer.Ordinal))
             {

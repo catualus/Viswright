@@ -38,6 +38,7 @@ namespace Viswright.Review
             double[]? after = final == null ? null : CompileMeasure.PerPoint(final, samples);
 
             WriteJson(Path.Combine(folder, "items.json"), numbered, samples);
+            WriteTour(Path.Combine(folder, "viswright_tour.lua"), name, numbered, samples);
             string vmf = Path.Combine(folder, name + "_review.vmf");
             var slack = slackAfter ?? slackBefore;
             ReviewVmf.Build(working, numbered, samples, before, after, slack?.Values).Save(vmf);
@@ -93,10 +94,72 @@ namespace Viswright.Review
                 }
                 else
                     json.WriteString("marker", $"vw_{number}_{item.Pass}");
+                if (item.Leak.Count > 0)
+                {
+                    json.WriteStartArray("leak");
+                    foreach (var w in item.Leak)
+                    {
+                        json.WriteStartArray();
+                        foreach (var p in w.Points)
+                        {
+                            json.WriteNumberValue(Math.Round(p.X, 1));
+                            json.WriteNumberValue(Math.Round(p.Y, 1));
+                            json.WriteNumberValue(Math.Round(p.Z, 1));
+                        }
+                        json.WriteEndArray();
+                    }
+                    json.WriteEndArray();
+                }
                 json.WriteEndObject();
             }
             json.WriteEndArray();
             json.WriteEndObject();
+        }
+
+        /// <summary>
+        /// A Lua script for Garry's Mod that steps through the top items in game: copy it to garrysmod/lua,
+        /// load the compiled map on a listen server with sv_cheats 1, run lua_openscript_cl
+        /// viswright_tour.lua, then viswright_next and viswright_prev (or viswright_go N) to stand where
+        /// each item is seen from, with its reason printed in the console and on screen.
+        /// </summary>
+        private static void WriteTour(string path, string map, List<(int Number, ReviewItem Item)> items, SamplePoints samples)
+        {
+            var lines = new List<string>
+            {
+                $"-- Viswright tour of {map}: the review's top items, seen from where a player stands.",
+                "-- Copy to garrysmod/lua, load the map on a listen server with sv_cheats 1, then:",
+                "--   lua_openscript_cl viswright_tour.lua   and   viswright_next / viswright_prev / viswright_go N",
+                "local stops = {",
+            };
+            foreach (var (number, item) in ReviewVmf.Highlights(items).Take(ReviewVmf.CameraCount))
+            {
+                var (eye, look) = ReviewVmf.Viewpoint(item, samples);
+                var d = look - eye;
+                double pitch = -Math.Atan2(d.Z, Math.Sqrt(d.X * d.X + d.Y * d.Y)) * 180 / Math.PI;
+                double yaw = Math.Atan2(d.Y, d.X) * 180 / Math.PI;
+                string text = $"#{number} {item.Pass} {item.Status.ToString().ToLowerInvariant()}: {item.Reason}".Replace("\\", "/").Replace("\"", "'");
+                lines.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"  {{ pos = \"{eye.X:0.#} {eye.Y:0.#} {eye.Z - 64:0.#}\", ang = \"{pitch:0.#} {yaw:0.#} 0\", text = \"{text}\" }},"));
+            }
+            lines.AddRange(new[]
+            {
+                "}",
+                "local at = 0",
+                "local function go(i)",
+                "  if #stops == 0 then return end",
+                "  at = ((i - 1) % #stops) + 1",
+                "  local s = stops[at]",
+                "  RunConsoleCommand(\"setpos\", unpack(string.Explode(\" \", s.pos)))",
+                "  RunConsoleCommand(\"setang\", unpack(string.Explode(\" \", s.ang)))",
+                "  print(\"[viswright] \" .. at .. \"/\" .. #stops .. \"  \" .. s.text)",
+                "  if notification then notification.AddLegacy(s.text, NOTIFY_HINT, 8) end",
+                "end",
+                "concommand.Add(\"viswright_next\", function() go(at + 1) end)",
+                "concommand.Add(\"viswright_prev\", function() go(math.max(at, 1) - 1) end)",
+                "concommand.Add(\"viswright_go\", function(_, _, args) go(tonumber(args[1]) or 1) end)",
+                "print(\"[viswright] \" .. #stops .. \" stops loaded; viswright_next to start\")",
+            });
+            File.WriteAllLines(path, lines);
         }
 
         private sealed record Plan(double Z, string Items, string Before, string? After, string? Change, string? Slack);

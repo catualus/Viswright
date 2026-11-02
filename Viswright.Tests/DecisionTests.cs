@@ -28,10 +28,12 @@ namespace Viswright.Tests
             Assert.Equal(1, file.Pending);
             Assert.Equal(Decision.Deny, file["hint:1_2"]!.Decision);
             file.Set("hint:1_2", i => i with { Decision = Decision.Accept });
+            file.ReviewFolder = Path.Combine(space.Root, "review");
             file.Save();
 
             // The next review finds the portal again and not the hint: the hint is kept, marked stale.
             var again = DecisionFile.Load(path);
+            Assert.Equal(Path.Combine(space.Root, "review"), again.ReviewFolder);
             Assert.True(again.Accepted("hint:1_2"));
             again.Merge([Item("areaportal:a", "areaportals", ItemStatus.Applied, new() { ["axis"] = 0 })]);
             Assert.True(again["hint:1_2"]!.Stale);

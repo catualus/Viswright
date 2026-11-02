@@ -144,6 +144,7 @@ namespace Viswright
                 if (found != null)
                 {
                     decisions.Merge(found.Items);
+                    decisions.ReviewFolder = Path.Combine(Path.GetDirectoryName(copy)!, "review");
                     decisions.Save();
                 }
                 Log.Out($"review: this compile uses the map as it is. {decisions.Pending} item(s) wait for a decision in {decisions.Path}: " +
