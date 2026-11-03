@@ -231,6 +231,10 @@ namespace Viswright
                 {
                     reference = lastVis = latest = portalCompile;
                     current = CompileMeasure.Of(portalCompile, samples);
+                    // The window stand-ins are brushes the baseline does not have; the passes after this one
+                    // are checked against the map with them in, or every one of them would be undone.
+                    if (portals > 0)
+                        collision = BspSpace.Load(portalCompile.Bsp).CollisionShapes(CollisionMask);
                 }
                 Lap("areaportals");
             }
