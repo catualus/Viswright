@@ -30,35 +30,106 @@ namespace Viswright
         /// <summary>Points found earlier and kept, so another compile is measured at the same places.</summary>
         public static SamplePoints From(IReadOnlyList<Vec3> points) => new(points);
 
-        /// <summary>Points a player can stand at; with <paramref name="reachable"/>, only those in clusters it accepts.</summary>
+        /// <summary>
+        /// Points a player can stand at; with <paramref name="reachable"/>, only those in clusters it accepts.
+        ///
+        /// Each column of the grid is walked down from the top of the map. A player stands on a solid
+        /// brush, or on a displacement - terrain - that is no steeper than they can walk. The tree has no
+        /// displacements in it, so the space under terrain is open there, down to the brush the terrain was
+        /// made from; below a displacement is taken as inside the ground, with nothing there a place to
+        /// stand until a solid brush is passed. Which way a displacement faces does not tell terrain from
+        /// an overhang - terrain is often sculpted from a brush's side - so a cave under a displacement
+        /// roof goes unmeasured.
+        /// </summary>
         public static SamplePoints Find(BspSpace space, Func<int, bool>? reachable = null)
         {
             double x0 = Math.Floor(space.Mins.X / Spacing) * Spacing + Spacing / 2;
+            double y0 = Math.Floor(space.Mins.Y / Spacing) * Spacing + Spacing / 2;
+            var terrain = TerrainByColumn(space.Displacements, x0, y0);
             int columns = Math.Max(0, (int)Math.Ceiling((space.Maxs.X - x0) / Spacing));
             var perColumn = new List<Vec3>[columns];
             System.Threading.Tasks.Parallel.For(0, columns, SourceKitConcurrency.Options, column =>
             {
                 double x = x0 + column * Spacing;
                 var points = perColumn[column] = [];
-                for (double y = Math.Floor(space.Mins.Y / Spacing) * Spacing + Spacing / 2; y < space.Maxs.Y; y += Spacing)
+                int row = 0;
+                for (double y = y0; y < space.Maxs.Y; y += Spacing, row++)
                 {
-                    bool aboveWasOpen = false;
+                    void Stand(Vec3 eye)
+                    {
+                        if (!space.IsSolid(eye) && space.ClusterAt(eye) is >= 0 and var cluster && (reachable == null || reachable(cluster)))
+                            points.Add(eye);
+                    }
+
+                    // the displacement surfaces this column passes through, from the top down
+                    var surfaces = terrain.TryGetValue((column, row), out var list) ? Crossings(list, x, y) : [];
+                    int next = 0;
+                    bool aboveWasOpen = false, underground = false;
                     for (double z = space.Maxs.Z - 1; z > space.Mins.Z; z -= Step)
                     {
+                        for (; next < surfaces.Count && surfaces[next].Z > z; next++)
+                        {
+                            var surface = surfaces[next];
+                            if (!underground && surface.Walkable)
+                                Stand(new Vec3(x, y, surface.Z + EyeHeight));
+                            underground = true;
+                        }
                         var here = new Vec3(x, y, z);
                         bool solid = space.IsSolid(here) || space.ClusterAt(here) < 0;
-                        if (solid && aboveWasOpen)
-                        {
-                            // The floor is just above here; stand on it.
-                            var eye = new Vec3(x, y, z + Step + EyeHeight);
-                            if (!space.IsSolid(eye) && space.ClusterAt(eye) is >= 0 and var cluster && (reachable == null || reachable(cluster)))
-                                points.Add(eye);
-                        }
+                        // The floor is just above here; stand on it.
+                        if (solid && aboveWasOpen && !underground)
+                            Stand(new Vec3(x, y, z + Step + EyeHeight));
+                        if (solid)
+                            underground = false;
                         aboveWasOpen = !solid;
                     }
                 }
             });
             return new SamplePoints(perColumn.SelectMany(c => c).ToList());
+        }
+
+        /// <summary>Steepest ground a player walks up: Source's 0.7 floor normal, about 45 degrees.</summary>
+        private const double WalkableNormal = 0.7;
+
+        /// <summary>The displacement triangles over each grid column (by column and row index).</summary>
+        private static Dictionary<(int, int), List<BspSpace.Triangle>> TerrainByColumn(IReadOnlyList<BspSpace.Triangle> triangles, double x0, double y0)
+        {
+            var byColumn = new Dictionary<(int, int), List<BspSpace.Triangle>>();
+            foreach (var t in triangles)
+            {
+                double minX = Math.Min(t.A.X, Math.Min(t.B.X, t.C.X)), maxX = Math.Max(t.A.X, Math.Max(t.B.X, t.C.X));
+                double minY = Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)), maxY = Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y));
+                for (int c = (int)Math.Ceiling((minX - x0) / Spacing); x0 + c * Spacing <= maxX; c++)
+                    for (int r = (int)Math.Ceiling((minY - y0) / Spacing); y0 + r * Spacing <= maxY; r++)
+                    {
+                        if (!byColumn.TryGetValue((c, r), out var list))
+                            byColumn[(c, r)] = list = [];
+                        list.Add(t);
+                    }
+            }
+            return byColumn;
+        }
+
+        /// <summary>Where the vertical line at (x, y) passes through the triangles, highest first.</summary>
+        private static List<(double Z, bool Walkable)> Crossings(List<BspSpace.Triangle> triangles, double x, double y)
+        {
+            var crossings = new List<(double Z, bool Walkable)>();
+            foreach (var t in triangles)
+            {
+                // barycentric coordinates of (x, y) in the triangle seen from above
+                double d = (t.B.Y - t.C.Y) * (t.A.X - t.C.X) + (t.C.X - t.B.X) * (t.A.Y - t.C.Y);
+                if (Math.Abs(d) < 1e-9)
+                    continue;
+                double a = ((t.B.Y - t.C.Y) * (x - t.C.X) + (t.C.X - t.B.X) * (y - t.C.Y)) / d;
+                double b = ((t.C.Y - t.A.Y) * (x - t.C.X) + (t.A.X - t.C.X) * (y - t.C.Y)) / d;
+                double c = 1 - a - b;
+                if (a < -1e-6 || b < -1e-6 || c < -1e-6)
+                    continue;
+                var normal = (t.B - t.A).Cross(t.C - t.A).Normalized();
+                crossings.Add((a * t.A.Z + b * t.B.Z + c * t.C.Z, Math.Abs(normal.Z) >= WalkableNormal));
+            }
+            crossings.Sort((p, q) => q.Z.CompareTo(p.Z));
+            return crossings;
         }
 
         /// <summary>Entities a player starts at or is sent to.</summary>
