@@ -27,6 +27,9 @@ namespace Viswright
 
         private SamplePoints(IReadOnlyList<Vec3> points) => Points = points;
 
+        /// <summary>Points found earlier and kept, so another compile is measured at the same places.</summary>
+        public static SamplePoints From(IReadOnlyList<Vec3> points) => new(points);
+
         /// <summary>Points a player can stand at; with <paramref name="reachable"/>, only those in clusters it accepts.</summary>
         public static SamplePoints Find(BspSpace space, Func<int, bool>? reachable = null)
         {
