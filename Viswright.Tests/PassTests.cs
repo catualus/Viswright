@@ -62,6 +62,74 @@ namespace Viswright.Tests
             Assert.False(opacity.IsOpaque("TOOLS/TOOLSNODRAW"));
         }
 
+        /// <summary>
+        /// A patch material's changes sit in its insert and replace blocks, one level down, and they
+        /// can make an opaque include see-through - or a see-through one opaque.
+        /// </summary>
+        [Fact]
+        public void APatchIsItsIncludeWithItsChangesMade()
+        {
+            var opacity = Opacity(Files(
+                ("materials/brick/wall.vmt", "\"LightmappedGeneric\"\n{\n\t\"$basetexture\" \"brick/wall\"\n}\n"),
+                ("materials/fence/solid.vmt", "LightmappedGeneric\n{\n$basetexture fence/solid\n$alphatest 0\n}\n"),
+                ("materials/glass/window.vmt", "LightmappedGeneric\n{\n$basetexture glass/window\n$translucent 1\n}\n"),
+                ("materials/glass/tinted.vmt", "patch\n{\ninclude \"materials/brick/wall.vmt\"\ninsert\n{\n$translucent 1\n}\n}\n"),
+                ("materials/fence/grate.vmt", "patch\n{\ninclude \"materials/fence/solid.vmt\"\nreplace\n{\n\"$alphatest\" \"1\"\n}\n}\n"),
+                ("materials/brick/faded.vmt", "patch { include materials/brick/wall.vmt insert { $alpha 0.4 } }"),
+                ("materials/brick/rough.vmt", "patch\n{\ninclude \"materials/brick/wall.vmt\"\ninsert\n{\n$surfaceprop brick\n$detailscale 4\n}\n}\n"),
+                ("materials/brick/rough_tinted.vmt", "patch\n{\ninclude \"materials/brick/rough.vmt\"\ninsert\n{\n$translucent 1\n}\n}\n"),
+                ("materials/glass/painted.vmt", "patch\n{\ninclude \"materials/glass/window.vmt\"\ninsert\n{\n$translucent 0\n}\n}\n"),
+                ("materials/brick/proxied.vmt", "patch\n{\ninclude \"materials/brick/wall.vmt\"\ninsert\n{\nProxies\n{\nAnimatedTexture\n{\n$translucent 1\n}\n}\n}\n}\n")));
+
+            Assert.False(opacity.IsOpaque("glass/tinted"));
+            Assert.False(opacity.IsOpaque("fence/grate"));
+            Assert.False(opacity.IsOpaque("brick/faded"));
+            Assert.True(opacity.IsOpaque("brick/rough"));
+            // A patch of a patch: the inner patch's changes are part of what the outer one includes.
+            Assert.False(opacity.IsOpaque("brick/rough_tinted"));
+            Assert.True(opacity.IsOpaque("glass/painted"));
+            // A key inside a proxy is a proxy's setting, not the material's.
+            Assert.True(opacity.IsOpaque("brick/proxied"));
+        }
+
+        /// <summary>A model draws with its textures' materials, so a patch over one is read the same way.</summary>
+        [Fact]
+        public void AModelWithAPatchedSeeThroughMaterialIsNotOpaque()
+        {
+            var files = Files(
+                ("materials/models/door/door.vmt", "VertexLitGeneric\n{\n$basetexture models/door/door\n}\n"),
+                ("materials/models/door/door_glass.vmt", "patch\n{\ninclude \"materials/models/door/door.vmt\"\ninsert\n{\n$translucent 1\n}\n}\n"));
+            var content = new GameContent(path => files.TryGetValue(path, out var text) ? Encoding.UTF8.GetBytes(text) : null);
+
+            Assert.True(content.IsModelOpaque(Model("door")));
+            Assert.False(content.IsModelOpaque(Model("door_glass")));
+        }
+
+        /// <summary>The parts of an MDL header a model's opacity is read from: its hull and one texture in one folder.</summary>
+        private static StudioModel Model(string texture)
+        {
+            var bytes = new byte[512];
+            Encoding.ASCII.GetBytes("IDST").CopyTo(bytes, 0);
+            BitConverter.GetBytes(48).CopyTo(bytes, 4);
+            for (int i = 0; i < 3; i++)
+            {
+                BitConverter.GetBytes(-16f).CopyTo(bytes, 104 + i * 4);
+                BitConverter.GetBytes(16f).CopyTo(bytes, 116 + i * 4);
+            }
+            // One texture entry at 320 naming the string at 400, and one folder at 420.
+            BitConverter.GetBytes(1).CopyTo(bytes, 204);
+            BitConverter.GetBytes(320).CopyTo(bytes, 208);
+            BitConverter.GetBytes(1).CopyTo(bytes, 212);
+            BitConverter.GetBytes(384).CopyTo(bytes, 216);
+            BitConverter.GetBytes(400 - 320).CopyTo(bytes, 320);
+            BitConverter.GetBytes(420).CopyTo(bytes, 384);
+            Encoding.ASCII.GetBytes(texture).CopyTo(bytes, 400);
+            Encoding.ASCII.GetBytes("models/door/").CopyTo(bytes, 420);
+            var model = StudioModel.Parse(bytes);
+            Assert.Equal([texture], model.TextureNames);
+            return model;
+        }
+
         private static string Box(int id, int x0, int y0, int z0, int x1, int y1, int z1, string material = "BRICK/WALL")
         {
             string[] planes =
