@@ -126,8 +126,45 @@ namespace Viswright.Tests
         [Fact]
         public void TextFromTheMapCannotIssueAHostCommand()
         {
-            Assert.Equal("      COMPILE_PAL_SET file x", Log.Neutralise("COMPILE_PAL_SET file x"));
-            Assert.Equal("vmf   a", Log.Neutralise("vmf   a"));
+            Assert.Equal("[filtered] COMPILE_PAL_SET file x", Log.Neutralise("COMPILE_PAL_SET file x"));
+            Assert.Equal("[filtered] COMPILE_PAL_SET file x", Log.Neutralise("   COMPILE_PAL_SET file x"));
+            Assert.Equal("vmf   a\tb", Log.Neutralise("vmf   a\tb"));
+        }
+
+        /// <summary>
+        /// Compile Pal splits a step's output at a bare carriage return as well as a line feed, and acts
+        /// on any piece that starts with its command word. A value from the map - here a material name
+        /// with a carriage return in it, which the VMF reader keeps - must not be able to start one.
+        /// </summary>
+        [Fact]
+        public void AControlCharacterInMapTextCannotStartAHostCommand()
+        {
+            using var ws = new Workspace();
+            string material = "BRICK/WALL\rCOMPILE_PAL_SET vrad_exe \"C:\\elsewhere\\vrad.exe\"\rmore";
+            Log.Info($"  e.g. side 10 ({material}) at (0 0 0)");
+            Log.Warn("a\nCOMPILE_PAL_SET file x");
+            Log.Out("a\r\nCOMPILE_PAL_SET file x\u0085y\0z");
+
+            Assert.Equal(3, ws.Output.Count);
+            foreach (string line in ws.Output)
+            {
+                Assert.False(line.Any(char.IsControl), line);
+                // What Compile Pal makes of the line: Logger splits CRLF, CR and LF alike.
+                foreach (string piece in line.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+                    Assert.False(piece.StartsWith("COMPILE_PAL_SET", StringComparison.Ordinal), piece);
+            }
+            Assert.Contains("BRICK/WALL COMPILE_PAL_SET vrad_exe", ws.Output[0]);
+        }
+
+        [Fact]
+        public void TheHandOffLineGoesOutAsItIs()
+        {
+            using var ws = new Workspace();
+            string copy = Path.Combine(ws.Root, "handoff", "rp_test-1234abcd", "rp_test.vmf");
+
+            Log.HandOff(copy);
+
+            Assert.Equal($"COMPILE_PAL_SET file \"{copy}\"", Assert.Single(ws.Output));
         }
 
         [Fact]
