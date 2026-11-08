@@ -47,6 +47,8 @@ namespace Viswright
             bool Accepted(string id) => decisions.Accepted(id);
             var left = new List<(string Id, string Why)>();
             Log.Info($"pinned: {accepted.Count} accepted item(s) in {decisions.Path}; nothing is searched");
+            // The entities the map came with, before the portals are added after them (see RunPasses).
+            var mapEntities = working.Entities.ToHashSet();
 
             // Areaportals: each doorway as decided, in the door its id names.
             AreaportalPass? portalPass = null;
@@ -152,8 +154,11 @@ namespace Viswright
             if (options.Slim)
             {
                 slimPass = new SlimmingPass();
-                slimPass.Apply(working, content, LuaGuard.Scan(LuaGuard.GameFolders(tools.GameFolder).Concat(options.LuaPaths)));
+                var lua = LuaGuard.Scan(LuaGuard.GameFolders(tools.GameFolder).Concat(options.LuaPaths));
+                slimPass.Apply(working, content, lua, mapEntities);
+                // Putting back what was not accepted also puts back what converting would now renumber.
                 slimPass.RevertWhere(e => !Accepted("slim:" + ReviewLog.Anchor(Centre(e))));
+                WarnMapIds("pinned", lua, slimPass);
             }
 
             // One compile checks the lot; whatever it shows does not fit is taken out and the map compiled again.
@@ -225,6 +230,12 @@ namespace Viswright
                     var refused = RefusedModels(run);
                     if (refused.Count > 0)
                         retry += slimPass.RevertModels(refused);
+                    else if (slimPass.KeepsMapIds && MapIdsMoved(baseline, compile, slimPass) is { } moved)
+                    {
+                        Log.Warn($"pinned: {slimPass.Converted.Count} entit(ies) left as they are: {moved}");
+                        retry += slimPass.Converted.Count;
+                        slimPass.RevertAll();
+                    }
                 }
                 if (retry == 0)
                     break;

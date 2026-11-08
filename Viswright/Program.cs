@@ -409,7 +409,9 @@ namespace Viswright
                       within Garry's Mod's limit of 191, keeping those that hide the most.
                       -fades gives static props with no fade one where they shrink to N pixels
                       (default 6). -slim turns entities that do nothing an entity can do into
-                      static props and func_detail, unless Lua looks their class up.
+                      static props and func_detail, unless Lua looks their class up; when Lua
+                      uses MapCreationID, only those that no map entity comes after, so map
+                      entity IDs stay stable.
                       -hints tries hints over open ground at a few heights and keeps each only
                       where it lowers what is visible, searching for at most M minutes (15).
                       With no -mode, a map's first run is a review: everything is searched and

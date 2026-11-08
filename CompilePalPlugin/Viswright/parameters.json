@@ -42,8 +42,8 @@
   {
     "Name": "Fewer entities",
     "Parameter": " -slim",
-    "Description": "Turn prop_dynamic that nothing names, parents, fires, animates or lets the physgun move into prop_static, and plain always-solid func_brush into func_detail, freeing edicts and network traffic. A func_brush is only changed when it already casts a lightmap shadow, so lighting stays the same. Classes that the game's gamemodes, addons or the Lua folders below look up by class are left alone.",
-    "Warning": "Converted entities no longer exist as entities. Lua that finds them some other way than by class would not find them."
+    "Description": "Turn prop_dynamic that nothing names, parents, fires, animates or lets the physgun move into prop_static, and plain always-solid func_brush into func_detail, freeing edicts and network traffic. A func_brush is only changed when it already casts a lightmap shadow, so lighting stays the same. Classes that the game's gamemodes, addons or the Lua folders below look up by class are left alone. When that Lua uses MapCreationID or GetMapCreatedEntity (DarkRP's saved doors, keypad links), map entity IDs are kept stable: only entities that no other map entity comes after are converted, often few or none, and the compiled BSP is checked for it.",
+    "Warning": "Converted entities no longer exist as entities. Lua that finds them some other way than by class or MapCreationID would not find them."
   },
   {
     "Name": "Lua folder",

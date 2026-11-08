@@ -86,6 +86,16 @@ Lua folders named, look entities up by is left alone. After compiling, the entit
 the static prop count rise by exactly the number converted, or the pass is undone; a prop VBSP still
 refuses (its copy of a model can differ from the one Viswright reads) is put back.
 
+Map entity IDs stay stable when the Lua uses them. Garry's Mod numbers map entities by their place in
+the BSP's entity list (`MapCreationID`), and a converted entity leaves that list, so every entity after
+it would move down a place: DarkRP keeps door titles, owners and job doors by that number, and keypad
+addons their links, so saved data would land on the wrong doors. When any scanned Lua uses
+`MapCreationID` or `GetMapCreatedEntity` (copying the ID into a field of the same name, as the game's
+own duplicator does, does not count), only entities with no other map entity after them in the list are
+converted - often few or none - and the compiled entity list is checked against the map's own: if any
+entity of the map moved, the pass is undone. The log says so as a warning and names the files, and the
+review lists each entity kept for it.
+
 **Hints over open ground** (`-hints`, `-hinttime M`) tries a hint brush across each 1,024-unit square of
 open ground - streets, courtyards, anywhere with 384 units or more of sky above where players stand - at
 heights from 192 to 960 units above the ground, below the sky. Every square is tried at the same step

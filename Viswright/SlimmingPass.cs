@@ -14,6 +14,11 @@ namespace Viswright
     /// like a prop_static, which costs neither; a func_brush the same is drawn like func_detail.
     /// Eligibility is strict - any key the static form does not support, set to anything but its
     /// default, keeps the entity as it is - and Lua that looks entities up by class protects the class.
+    ///
+    /// VBSP leaves a prop_static or func_detail out of the BSP's entity list, and Garry's Mod numbers map
+    /// entities by their place in that list (MapCreationID). When the server's Lua finds entities by that
+    /// number - DarkRP's saved doors, keypad links - an entity is only converted if no entity that stays in
+    /// the list comes after it, so every one that stays keeps its number.
     /// </summary>
     public sealed class SlimmingPass
     {
@@ -38,10 +43,31 @@ namespace Viswright
             ("excludednpc", [""]),
         ];
 
+        /// <summary>
+        /// Classes VBSP leaves out of the BSP's entity list: what they hold goes to a lump of its own or into
+        /// the world. Taken from what vbsp++ wrote for the downtown maps and ten of Valve's TF2 maps. A class
+        /// not listed is taken to stay, which can only keep more entities as they are; func_ladder, for one,
+        /// stays as info_ladder. An info_overlay is left out only without a name: a named one stays as
+        /// info_overlay_accessor.
+        /// </summary>
+        private static readonly HashSet<string> LeftOutOfEntityList = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "prop_static", "func_detail", "env_cubemap", "info_lighting", "func_viscluster", "info_no_dynamic_shadow", "func_instance",
+        };
+
         private readonly List<(VmfNode Entity, string Before)> converted = [];
         private readonly Dictionary<VmfNode, string?> shadowsBefore = new();
+        private VmfDocument? map;
+        private IReadOnlySet<VmfNode>? mapEntities;
+        private string? mapIdFile;
 
         public IReadOnlyList<(VmfNode Entity, string Before)> Converted => converted;
+
+        /// <summary>Set when Lua finds map entities by MapCreationID, so every map entity that stays in the entity list must keep its place.</summary>
+        public bool KeepsMapIds { get; private set; }
+
+        /// <summary>Entities that qualified but stay as they are, because converting them would move a map entity after them to a new MapCreationID.</summary>
+        public int KeptForMapIds { get; private set; }
 
         /// <summary>func_brush left alone only because converting would change how it is lit.</summary>
         public int LightingChanges { get; private set; }
@@ -54,8 +80,18 @@ namespace Viswright
         /// <summary>Each entity passed over, and why, for the review.</summary>
         public List<(VmfNode Entity, string Reason)> SkippedEntities { get; } = [];
 
-        public int Apply(VmfDocument map, GameContent content, LuaGuard lua)
+        /// <summary>
+        /// Converts every entity that qualifies. Returns how many. <paramref name="mapEntities"/> are the
+        /// entities the map came with, when other passes have added their own after them: those are made
+        /// again on every compile, so nothing saved can rely on their place. Null counts every entity.
+        /// </summary>
+        public int Apply(VmfDocument map, GameContent content, LuaGuard lua, IReadOnlySet<VmfNode>? mapEntities = null)
         {
+            this.map = map;
+            this.mapEntities = mapEntities;
+            KeepsMapIds = lua.UsesMapIds;
+            mapIdFile = lua.MapIdFiles.FirstOrDefault();
+
             bool Guarded(string cls)
             {
                 if (!lua.Protects(cls, out string? file, out string? lookup)) return false;
@@ -104,7 +140,124 @@ namespace Viswright
                     e.Set("classname", "func_detail");
                 }
             }
+            KeepMapIds();
             return converted.Count;
+        }
+
+        /// <summary>
+        /// When Lua finds map entities by MapCreationID, puts back every converted entity that a map entity
+        /// staying in the entity list comes after. VBSP writes the list in the VMF's order, leaving out the
+        /// classes it takes elsewhere, so only a run of conversions at the very end of the map takes nothing
+        /// from anyone's place. Returns how many went back.
+        /// </summary>
+        private int KeepMapIds()
+        {
+            if (!KeepsMapIds || map == null || converted.Count == 0)
+                return 0;
+            var mine = converted.Select(c => c.Entity).ToHashSet();
+            var entities = map.Entities.Where(e => mapEntities == null || mapEntities.Contains(e)).ToList();
+            // VBSP puts an instance's entities after all of the map's own, so with an instance in the map
+            // no entity of the map's own is last.
+            bool staysAfter = entities.Any(e => string.Equals(e.Classname, "func_instance", StringComparison.OrdinalIgnoreCase));
+            var back = new List<VmfNode>();
+            for (int i = entities.Count - 1; i >= 0; i--)
+            {
+                if (mine.Contains(entities[i]))
+                {
+                    if (staysAfter)
+                        back.Add(entities[i]);
+                }
+                else if (InEntityList(entities[i]))
+                    staysAfter = true;
+            }
+            string reason = $"kept as an entity: making it static would give the map entities after it new MapCreationIDs, which Lua finds them by ({mapIdFile})";
+            foreach (var entity in back)
+            {
+                var entry = converted.First(c => ReferenceEquals(c.Entity, entity));
+                Restore(entry.Entity, entry.Before);
+                converted.Remove(entry);
+                Skip(reason, entity);
+            }
+            KeptForMapIds += back.Count;
+            return back.Count;
+        }
+
+        /// <summary>Whether VBSP keeps <paramref name="entity"/>, as it is now, in the BSP's entity list.</summary>
+        internal static bool InEntityList(VmfNode entity)
+        {
+            string cls = entity.Classname ?? "";
+            if (string.Equals(cls, "info_overlay", StringComparison.OrdinalIgnoreCase))
+                return !string.IsNullOrEmpty(entity.Get("targetname"));
+            return !LeftOutOfEntityList.Contains(cls);
+        }
+
+        /// <summary>The hammerid and classname of each entity in a BSP's entity list, in order.</summary>
+        public static List<(string? Id, string? Classname)> EntityList(string bsp)
+        {
+            var bytes = System.IO.File.ReadAllBytes(bsp);
+            int offset = BitConverter.ToInt32(bytes, 8), length = BitConverter.ToInt32(bytes, 12);
+            return EntityListOf(System.Text.Encoding.Latin1.GetString(bytes, offset, length));
+        }
+
+        internal static List<(string? Id, string? Classname)> EntityListOf(string lump)
+        {
+            var list = new List<(string? Id, string? Classname)>();
+            string? key = null, id = null, classname = null;
+            bool open = false;
+            for (int i = 0; i < lump.Length; i++)
+            {
+                char c = lump[i];
+                if (c == '"')
+                {
+                    int end = lump.IndexOf('"', i + 1);
+                    if (end < 0)
+                        break;
+                    string token = lump[(i + 1)..end];
+                    i = end;
+                    if (!open)
+                        continue;
+                    if (key == null)
+                        key = token;
+                    else
+                    {
+                        if (key.Equals("hammerid", StringComparison.OrdinalIgnoreCase)) id ??= token;
+                        else if (key.Equals("classname", StringComparison.OrdinalIgnoreCase)) classname ??= token;
+                        key = null;
+                    }
+                }
+                else if (c == '{')
+                {
+                    open = true;
+                    key = id = classname = null;
+                }
+                else if (c == '}' && open)
+                {
+                    list.Add((id, classname));
+                    open = false;
+                }
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// The first entity of <paramref name="before"/>, other than those in <paramref name="converted"/>
+        /// (by hammerid), that <paramref name="after"/> does not have at the same place, described; null
+        /// when every one kept its place and so its MapCreationID. Entities added after them are fine.
+        /// </summary>
+        public static string? Renumbered(IReadOnlyList<(string? Id, string? Classname)> before, IReadOnlyList<(string? Id, string? Classname)> after,
+            IReadOnlySet<string> converted)
+        {
+            // Every map has its world first; a list without it was not read, and proves nothing.
+            if (before.Count == 0)
+                return "the map's entity list could not be read, so it cannot be shown that no MapCreationID changes";
+            for (int i = 0; i < before.Count; i++)
+            {
+                if (before[i].Id is { } id && converted.Contains(id))
+                    continue;
+                if (i >= after.Count || after[i] != before[i])
+                    return $"{before[i].Classname} {before[i].Id} would move from place {i} in the entity list, changing its MapCreationID";
+            }
+            return null;
         }
 
         /// <summary>Whether the entity has no outputs and every listed key at a default value.</summary>
@@ -143,6 +296,9 @@ namespace Viswright
                 converted.Remove((entity, before));
                 SkippedEntities.Add((entity, "VBSP would not take its model as a static prop"));
             }
+            // An entity put back stays in the entity list, so the ones converted before it would now move it.
+            if (back.Count > 0)
+                KeepMapIds();
             return back.Count;
         }
 
@@ -153,7 +309,10 @@ namespace Viswright
             converted.Clear();
         }
 
-        /// <summary>Puts back the converted entities <paramref name="back"/> picks. Returns how many.</summary>
+        /// <summary>
+        /// Puts back the converted entities <paramref name="back"/> picks, and when map entities must keep
+        /// their places, any converted before one of those. Returns how many <paramref name="back"/> picked.
+        /// </summary>
         public int RevertWhere(Func<VmfNode, bool> back)
         {
             var picked = converted.Where(c => back(c.Entity)).ToList();
@@ -162,6 +321,8 @@ namespace Viswright
                 Restore(entity, before);
                 converted.Remove((entity, before));
             }
+            if (picked.Count > 0)
+                KeepMapIds();
             return picked.Count;
         }
 

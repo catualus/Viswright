@@ -223,6 +223,9 @@ namespace Viswright
             // step that needs one uses it rather than compiling the same map again.
             WorkCompile lastVis = baseline;
             WorkCompile latest = baseline;
+            // The entities the map came with. The passes add theirs after them all, made again on every
+            // compile, so only these have a place in the entity list that Lua can have saved.
+            var mapEntities = working.Entities.ToHashSet();
             if (options.Areaportals)
             {
                 portals = RunAreaportals(working, copy, Path.Combine(work, "areaportals"), name, tools, baseline, samples, collision, content, guard,
@@ -354,7 +357,7 @@ namespace Viswright
             }
             if (options.Slim)
             {
-                RunSlimming(working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard, review, latest, luaScan!.Result);
+                RunSlimming(working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard, review, latest, luaScan!.Result, baseline, mapEntities);
                 Lap("slim");
             }
 
@@ -416,7 +419,8 @@ namespace Viswright
         }
 
         private static void RunSlimming(VmfDocument working, string copy, string folder, string name,
-            Toolchain tools, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard, ReviewLog review, WorkCompile latest, LuaGuard lua)
+            Toolchain tools, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard, ReviewLog review, WorkCompile latest, LuaGuard lua,
+            WorkCompile baseline, IReadOnlySet<VmfNode> mapEntities)
         {
             void Report(SlimmingPass pass, string? undone)
             {
@@ -438,13 +442,14 @@ namespace Viswright
             Log.Info($"slim: {lua.FilesScanned:N0} Lua file(s) scanned; {lua.Classes.Count} class(es) looked up by class name");
 
             var pass = new SlimmingPass();
-            int count = pass.Apply(working, content, lua);
+            int count = pass.Apply(working, content, lua, mapEntities);
             foreach (var (why, many) in pass.Skipped.OrderByDescending(kv => kv.Value).Take(8))
                 Log.Info($"  {many} left as entities: {why}");
             foreach (var (cls, lookup, file) in pass.Protected)
                 Log.Info($"  {cls} protected: Lua looks up \"{lookup}\" in {file}");
             if (pass.LightingChanges > 0)
                 Log.Info($"  {pass.LightingChanges} func_brush left alone: as func_detail it would cast a lightmap shadow it does not cast now");
+            WarnMapIds("slim", lua, pass);
             if (count == 0)
             {
                 Report(pass, null);
@@ -497,11 +502,47 @@ namespace Viswright
                 return;
             }
 
+            // The choice was made from the VMF's order; what VBSP wrote is the proof. Every entity of the
+            // map as it is must sit where it did, the entities the passes add coming after them all.
+            if (pass.KeepsMapIds && MapIdsMoved(baseline, compile, pass) is { } moved)
+            {
+                Report(pass, $"the pass was undone: {moved}");
+                pass.RevertAll();
+                Log.Warn($"slim: undone, {moved}");
+                return;
+            }
+
             pass.Declare(guard);
             Report(pass, null);
             Log.Check($"slim: {props} prop_dynamic made prop_static, {brushes} func_brush made func_detail: {pass.Converted.Count} fewer entities" +
-                (back > 0 ? $" ({back} put back: VBSP would not take their model as static)" : ""));
+                (back > 0 ? $" ({back} put back: VBSP would not take their model as static)" : "") +
+                (pass.KeepsMapIds ? $"; every map entity keeps its MapCreationID ({pass.KeptForMapIds} kept as entities for it)" : ""));
         }
+
+        /// <summary>
+        /// Says, loudly, that Lua finds map entities by MapCreationID and how many entities the pass kept
+        /// for it, with the files that do it.
+        /// </summary>
+        private static void WarnMapIds(string step, LuaGuard lua, SlimmingPass pass)
+        {
+            if (!lua.UsesMapIds)
+                return;
+            Log.Warn($"{step}: Lua finds map entities by MapCreationID, their place in the BSP's entity list, in {lua.MapIdFiles.Count} file(s); " +
+                "DarkRP keeps its doors by it and keypad addons their links. Only entities with no map entity after them are made static: " +
+                $"{pass.KeptForMapIds} that qualified are kept as entities so no ID changes");
+            foreach (string file in lua.MapIdFiles.Take(6))
+                Log.Info($"  MapCreationID used in {file}");
+            if (lua.MapIdFiles.Count > 6)
+                Log.Info($"  and {lua.MapIdFiles.Count - 6} more file(s)");
+        }
+
+        /// <summary>
+        /// How a map entity would move in <paramref name="compile"/>'s entity list against the map as it is,
+        /// leaving aside the entities <paramref name="pass"/> converted; null when none would.
+        /// </summary>
+        private static string? MapIdsMoved(WorkCompile baseline, WorkCompile compile, SlimmingPass pass) =>
+            SlimmingPass.Renumbered(SlimmingPass.EntityList(baseline.Bsp), SlimmingPass.EntityList(compile.Bsp),
+                pass.Converted.Select(c => c.Entity.Id).OfType<long>().Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToHashSet());
 
         /// <summary>How far from a detailed brush standing points count as around it.</summary>
         private const double DetailReach = 384;
