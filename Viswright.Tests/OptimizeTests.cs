@@ -103,6 +103,30 @@ namespace Viswright.Tests
             Assert.Contains(ws.Output, line => line.StartsWith("error: ", StringComparison.Ordinal));
         }
 
+        /// <summary>
+        /// A run's compiles go when it ends, with any an older and longer run left, but the baseline the
+        /// next run reuses and the lists the log points to stay.
+        /// </summary>
+        [Fact]
+        public void ARunLeavesOnlyTheBaselineAndTheListsInItsWorkFolder()
+        {
+            using var ws = new Workspace();
+            string map = ws.Write(@"maps\rp_test.vmf", Workspace.Room);
+            string work = Path.Combine(Path.GetDirectoryName(Handoff.CopyPath(map))!, "work");
+            foreach (string folder in new[] { "baseline", "hints-walls-240", "hints-3", "hints", "pinned" })
+            {
+                Directory.CreateDirectory(Path.Combine(work, folder));
+                File.WriteAllText(Path.Combine(work, folder, "rp_test.vmf"), "versioninfo\n{\n}\n");
+            }
+            File.WriteAllText(Path.Combine(work, "fades.txt"), "models/a.mdl\t1\t900\n");
+
+            Optimizer.Run(new OptimizeOptions { Input = map });
+
+            Assert.Equal("baseline", Path.GetFileName(Assert.Single(Directory.GetDirectories(work))));
+            Assert.True(File.Exists(Path.Combine(work, "baseline", "rp_test.vmf")));
+            Assert.True(File.Exists(Path.Combine(work, "fades.txt")));
+        }
+
         [Fact]
         public void AMalformedMapStopsTheStepWithoutHandingOn()
         {

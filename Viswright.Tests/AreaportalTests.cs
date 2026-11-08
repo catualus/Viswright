@@ -103,6 +103,10 @@ namespace Viswright.Tests
             var brush = VmfBrush.Build(portal.Child("solid")!)!;
             Assert.Equal(new SourceKit.Geometry.Vec3(254, 95, 15), brush.Mins);
             Assert.Equal(new SourceKit.Geometry.Vec3(258, 161, 113), brush.Maxs);
+
+            // The pass's compiles are cleared once the run ends; the baseline stays for the next run.
+            string work = Path.Combine(Path.GetDirectoryName(result.CopyPath!)!, "work");
+            Assert.Equal("baseline", Path.GetFileName(Assert.Single(Directory.GetDirectories(work))));
         }
 
         [Fact]

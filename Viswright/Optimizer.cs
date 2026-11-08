@@ -128,10 +128,22 @@ namespace Viswright
 
             int detailed = 0, nodrawn = 0, portals = 0;
             ReviewLog? found = null;
-            if (mode == RunMode.Pinned)
-                (detailed, nodrawn, portals) = RunPinned(options, working, copy, guard, decisions);
-            else if (anyPass)
-                (detailed, nodrawn, portals, found) = RunPasses(mode == RunMode.Review ? options with { Review = true } : options, working, copy, guard);
+            // The compiles a run checks its passes with are read by that run alone, and a big map's come
+            // to gigabytes. They are cleared when it ends, however it ends, and before it starts, for
+            // whatever a run that was killed left behind.
+            string work = Path.Combine(Path.GetDirectoryName(copy)!, "work");
+            ClearWork(work);
+            try
+            {
+                if (mode == RunMode.Pinned)
+                    (detailed, nodrawn, portals) = RunPinned(options, working, copy, guard, decisions);
+                else if (anyPass)
+                    (detailed, nodrawn, portals, found) = RunPasses(mode == RunMode.Review ? options with { Review = true } : options, working, copy, guard);
+            }
+            finally
+            {
+                ClearWork(work);
+            }
 
             var changes = VmfDiff.Compare(original, working);
             var undeclared = guard.Undeclared(changes);
@@ -682,7 +694,8 @@ namespace Viswright
                 rounds.Add((tries, WorkCompile.Prepare(working, copy, $"{folder}-{round + 1}", name)));
                 pass.RevertAll();
             }
-            var compiled = new WorkCompile?[rounds.Count];
+            // What each height's points see, measured as soon as its VVIS ends so that its folder can go.
+            var compiled = new double[]?[rounds.Count];
             int started = 0;
             using (var lanes = new System.Threading.SemaphoreSlim(HintLanes))
             {
@@ -706,28 +719,34 @@ namespace Viswright
                             var c = rounds[r].Compile;
                             if (c.RunVbsp(tools).Succeeded && !c.Leaked && c.RunVvis(tools).Succeeded)
                             {
-                                compiled[r] = c;
+                                compiled[r] = CompileMeasure.PerPoint(c, samples);
                                 long took = (c.VbspRun!.Elapsed + c.VvisRun!.Elapsed).Ticks;
                                 lock (compiled)
                                     slowest = TimeSpan.FromTicks(Math.Max(slowest.Ticks, took / HintLanes));
                             }
                         }
-                        finally { lanes.Release(); }
+                        finally
+                        {
+                            rounds[r].Compile.Discard();
+                            lanes.Release();
+                        }
                     }));
                 }
                 System.Threading.Tasks.Task.WaitAll(running.ToArray());
             }
+            // The heights time ran out for were written out but never compiled.
+            foreach (var (_, unused) in rounds.Skip(started))
+                unused.Discard();
             SourceKitConcurrency.ThrowIfCancelled();
 
             for (int round = 0; round < started; round++)
             {
-                var (tries, compile) = (rounds[round].Tries, compiled[round]);
-                if (compile == null)
+                var (tries, cost) = (rounds[round].Tries, compiled[round]);
+                if (cost == null)
                 {
                     Log.Warn($"hints: height {round + 1} did not compile cleanly; skipped");
                     continue;
                 }
-                var cost = CompileMeasure.PerPoint(compile, samples);
                 int better = 0;
                 foreach (var (square, height) in tries)
                 {
@@ -794,7 +813,8 @@ namespace Viswright
 
             pass.Declare(guard);
             Report(null);
-            string list = Path.Combine(folder, "hints.txt");
+            // Beside the work folders rather than in this compile's: those are cleared when the run ends.
+            string list = Path.Combine(Path.GetDirectoryName(folder)!, "hints.txt");
             File.WriteAllLines(list, pass.Placed.OrderBy(kv => kv.Key.X).ThenBy(kv => kv.Key.Y)
                 .Select(kv => $"{kv.Key.Mins.X:0} {kv.Key.Mins.Y:0} to {kv.Key.Maxs.X:0} {kv.Key.Maxs.Y:0} at z {kv.Value.Height:0}: {best[kv.Key].Gain:P1} less seen there"));
             Log.Check($"hints: {pass.Placed.Count} kept; triangles visible from a standing position {before.SampledTriangles:N0} -> {after!.SampledTriangles:N0} " +
@@ -1144,6 +1164,21 @@ namespace Viswright
             double dy = Math.Max(0, Math.Max(lo.Y - p.Y, p.Y - hi.Y));
             double dz = Math.Max(0, Math.Max(lo.Z - p.Z, p.Z - hi.Z));
             return Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        /// <summary>
+        /// Deletes every compile folder in <paramref name="work"/> but the baseline, which the next run
+        /// reuses while the map is unchanged. Nothing else in it is read once a run ends: a review is
+        /// drawn from its compiles before the run ends, and a pinned run needs only the baseline. The
+        /// files beside the folders - the lists of fades and hints the log points to - stay.
+        /// </summary>
+        private static void ClearWork(string work)
+        {
+            if (!Directory.Exists(work))
+                return;
+            foreach (string folder in Directory.GetDirectories(work))
+                if (!string.Equals(Path.GetFileName(folder), "baseline", StringComparison.OrdinalIgnoreCase))
+                    WorkCompile.DeleteFolder(folder);
         }
 
         /// <summary>
