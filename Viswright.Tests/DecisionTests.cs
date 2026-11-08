@@ -117,6 +117,98 @@ namespace Viswright.Tests
             Assert.Equal(0, RoundTrip.Apply(file, review));
         }
 
+        /// <summary>A review folder whose VMF the mapper has saved as <paramref name="edited"/> since it was written.</summary>
+        private static string EditedReview(Workspace space, string itemsJson, string edited)
+        {
+            string review = Path.Combine(space.Root, "review");
+            Directory.CreateDirectory(review);
+            File.WriteAllText(Path.Combine(review, "items.json"), itemsJson);
+            string vmf = Path.Combine(review, "x_review.vmf");
+            File.WriteAllText(vmf, "x");
+            File.WriteAllText(Path.Combine(review, RoundTrip.StampFile), File.GetLastWriteTimeUtc(vmf).Ticks.ToString());
+            File.WriteAllText(vmf, edited);
+            File.SetLastWriteTimeUtc(vmf, File.GetLastWriteTimeUtc(vmf).AddMinutes(1));
+            return review;
+        }
+
+        private static string BrushEntity(int id, string classname, double x0, double y0, double z0, double x1, double y1, double z1) =>
+            $"entity\r\n{{\r\n\t\"id\" \"{id}\"\r\n\t\"classname\" \"{classname}\"\r\n" + AreaportalTests.Box(x0, y0, z0, x1, y1, z1, "TOOLS/TOOLSAREAPORTAL") + "}\r\n";
+
+        private static Dictionary<string, double> DoorwayData() => new()
+        {
+            ["axis"] = 0, ["a0"] = 0, ["a1"] = 8, ["w0"] = 0, ["w1"] = 8, ["z0"] = 0, ["z1"] = 8, ["closes"] = 1, ["startOpen"] = 0,
+        };
+
+        private static Dictionary<string, double> WindowData() => new()
+        {
+            ["axis"] = 0, ["x0"] = 0, ["y0"] = 0, ["z0"] = 0, ["x1"] = 8, ["y1"] = 8, ["z1"] = 8, ["passage"] = 0,
+        };
+
+        [Fact]
+        public void DeletingThePortalDeniesItEvenWithTheDoorItNamedOrTheWindowsStandInLeft()
+        {
+            using var space = new Workspace();
+            var file = DecisionFile.Load(Path.Combine(space.Root, "maps", "x.viswright.json"));
+            file.Merge([
+                Item("areaportal:func_door", "areaportals", ItemStatus.Applied, DoorwayData()),
+                Item("areaportal:prop_door", "areaportals", ItemStatus.Applied, DoorwayData()),
+                Item("window:0_0_0", "areaportals", ItemStatus.Applied, WindowData()),
+                Item("areaportal:door_gone", "areaportals", ItemStatus.Applied, DoorwayData()),
+            ]);
+            file.Save();
+
+            // Portals 20, 30 and 40 deleted; the func_door 21 the first one named, the prop door 31 and the
+            // window's stand-in 41 left. For the last item only its door 51 was deleted: its portal 50 stays.
+            string review = EditedReview(space, """
+                { "items": [
+                  { "id": "areaportal:func_door", "pass": "areaportals", "nodes": [20, 21] },
+                  { "id": "areaportal:prop_door", "pass": "areaportals", "nodes": [30, 31] },
+                  { "id": "window:0_0_0", "pass": "areaportals", "nodes": [40, 41] },
+                  { "id": "areaportal:door_gone", "pass": "areaportals", "nodes": [50, 51] }
+                ] }
+                """,
+                "world\r\n{\r\n\t\"id\" \"1\"\r\n}\r\n" +
+                BrushEntity(21, "func_door", -2, 0, 0, 2, 64, 96) +
+                "entity\r\n{\r\n\t\"id\" \"31\"\r\n\t\"classname\" \"prop_door_rotating\"\r\n\t\"origin\" \"0 32 0\"\r\n}\r\n" +
+                BrushEntity(41, "func_brush", -1, 0, 0, 9, 8, 8) +
+                BrushEntity(50, "func_areaportal", 0, 0, 0, 8, 8, 8));
+
+            Assert.Equal(3, RoundTrip.Apply(file, review));
+            Assert.Equal(Decision.Deny, file["areaportal:func_door"]!.Decision);
+            Assert.False(file["areaportal:func_door"]!.Altered);
+            Assert.Equal(new Vec3(8, 8, 8), file["areaportal:func_door"]!.Maxs);
+            Assert.Equal(Decision.Deny, file["areaportal:prop_door"]!.Decision);
+            Assert.Equal(Decision.Deny, file["window:0_0_0"]!.Decision);
+            Assert.Equal(Decision.Pending, file["areaportal:door_gone"]!.Decision);
+        }
+
+        [Fact]
+        public void AMovedWindowPortalMovesTheWindowAPinnedRunPutsBack()
+        {
+            using var space = new Workspace();
+            var file = DecisionFile.Load(Path.Combine(space.Root, "maps", "x.viswright.json"));
+            file.Merge([Item("window:0_0_0", "areaportals", ItemStatus.Applied, WindowData())]);
+            file.Save();
+
+            string review = EditedReview(space, """
+                { "items": [ { "id": "window:0_0_0", "pass": "areaportals", "nodes": [40, 41] } ] }
+                """,
+                "world\r\n{\r\n\t\"id\" \"1\"\r\n}\r\n" +
+                BrushEntity(40, "func_areaportalwindow", 0, 16, 32, 8, 80, 96) +
+                BrushEntity(41, "func_brush", -1, 0, 0, 9, 8, 8));
+
+            Assert.Equal(1, RoundTrip.Apply(file, review));
+            var moved = file["window:0_0_0"]!;
+            Assert.Equal(Decision.Accept, moved.Decision);
+            Assert.True(moved.Altered);
+            static bool Near(Vec3 a, Vec3 b) => (a - b).Length < 0.01;
+            Assert.True(Near(moved.Mins, new Vec3(0, 16, 32)) && Near(moved.Maxs, new Vec3(8, 80, 96)));
+            // Pinned runs put a window back from these keys, so they have to move with it, not only Z.
+            var window = DecisionFile.Window(moved.Data);
+            Assert.True(Near(window.Mins, new Vec3(0, 16, 32)) && Near(window.Maxs, new Vec3(8, 80, 96)));
+            Assert.False(moved.Data.ContainsKey("a0"));
+        }
+
         [Fact]
         public void APinnedMapCompilesTheSameEveryTime()
         {
