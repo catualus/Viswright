@@ -24,6 +24,12 @@ namespace Viswright
     public static partial class Optimizer
     {
         /// <summary>
+        /// How many times a pinned run compiles to check its items, each time leaving out what the one
+        /// before found at fault: as many as the areaportal pass gives itself to place its candidates.
+        /// </summary>
+        private const int PinnedRounds = 40;
+
+        /// <summary>
         /// A pinned run: the accepted items, put back exactly as they were decided, with no search. One VBSP
         /// compile checks them - for a leak, an areaportal that divides no areas, a model VBSP refuses as a
         /// static prop, and changed collision - and an item that no longer fits the map is left out and
@@ -52,6 +58,8 @@ namespace Viswright
 
             // Areaportals: each doorway as decided, in the door its id names.
             AreaportalPass? portalPass = null;
+            var doorwayIds = new Dictionary<Doorway, string>();
+            var windowIds = new Dictionary<Window, string>();
             if (options.Areaportals)
             {
                 portalPass = new AreaportalPass(working) { Pictures = options.WindowPictures ? new WindowPictures(name, tools.GameFolder) : null };
@@ -69,7 +77,10 @@ namespace Viswright
                         else if (existing + doorways.Count + windows.Count >= Audit.PortalBudget)
                             left.Add((item.Id, $"Garry's Mod's {Audit.PortalBudget} areaportals are used up"));
                         else
+                        {
                             windows.Add(DecisionFile.Window(item.Data));
+                            windowIds.TryAdd(windows[^1], item.Id);
+                        }
                         continue;
                     }
                     var door = FindDoor(doors, item);
@@ -78,7 +89,10 @@ namespace Viswright
                     else if (existing + doorways.Count + windows.Count >= Audit.PortalBudget)
                         left.Add((item.Id, $"Garry's Mod's {Audit.PortalBudget} areaportals are used up"));
                     else
+                    {
                         doorways.Add(AreaportalPass.Seated(DecisionFile.Doorway(door, item.Data), doorContent));
+                        doorwayIds.TryAdd(doorways[^1], item.Id);
+                    }
                 }
                 portalPass.Apply(doorways);
                 if (portalPass.Pictures != null)
@@ -161,10 +175,20 @@ namespace Viswright
                 WarnMapIds("pinned", lua, slimPass);
             }
 
-            // One compile checks the lot; whatever it shows does not fit is taken out and the map compiled again.
+            // One compile checks the lot; whatever it shows does not fit is taken out and the map compiled
+            // again, until a compile shows nothing. VBSP stops at the first leak or refused portal, so a
+            // round finds one at a time: there are as many rounds as the areaportal pass gives itself.
+            // What the latest round found at fault, by the ids the decisions file knows them by.
             WorkCompile? compile = null;
-            for (int round = 1; round <= 12; round++)
+            bool clean = false;
+            var fault = new List<string>();
+            string PortalId(VmfNode portal) =>
+                portalPass!.Added.FirstOrDefault(a => ReferenceEquals(a.Portal, portal)).Doorway is { } d && doorwayIds.TryGetValue(d, out string? id)
+                    ? id : portal.Get("targetname") ?? "an areaportal";
+            string WindowId(Window window) => windowIds.GetValueOrDefault(window) ?? "window:" + ReviewLog.Anchor(window.Mins);
+            for (int round = 1; round <= PinnedRounds; round++)
             {
+                fault.Clear();
                 compile = WorkCompile.Prepare(working, copy, Path.Combine(work, "pinned"), name);
                 var run = compile.RunVbsp(tools);
                 if (compile.Leaked)
@@ -175,13 +199,17 @@ namespace Viswright
                     {
                         var near = portalPass.Added.Where(a => leak.Points.Any(p => Distance(p, a.Doorway) < 64)).Select(a => a.Portal).ToHashSet();
                         var nearWindows = portalPass.AddedWindows.Where(a => leak.Points.Any(p => Distance(p, a.Window.Mins, a.Window.Maxs) < 64)).Select(a => a.Window).ToHashSet();
+                        fault.AddRange(near.Select(PortalId).Concat(nearWindows.Select(WindowId)));
                         dropped += near.Count + nearWindows.Count;
                         portalPass.KeepOnly(portalPass.Added.Select(a => a.Portal).Where(p => !near.Contains(p)).ToHashSet(),
                             "a leak ran through its doorway: the portal no longer seals it");
                         portalPass.KeepWindows(portalPass.AddedWindows.Select(a => a.Window).Where(w => !nearWindows.Contains(w)).ToHashSet());
                     }
-                    if (detailPass != null)
-                        dropped += detailPass.RevertNear(leak, 64);
+                    if (detailPass != null && detailPass.RevertNear(leak, 64) is > 0 and var reverted)
+                    {
+                        fault.Add($"{reverted} detail brush(es) on the leak path");
+                        dropped += reverted;
+                    }
                     if (dropped == 0)
                     {
                         UndoAll();
@@ -193,6 +221,7 @@ namespace Viswright
                 }
                 if (!run.Succeeded && portalPass?.RefusedBy(run.Output) is var (refusedDoors, refusedWindows) && refusedDoors.Count + refusedWindows.Count > 0)
                 {
+                    fault.AddRange(refusedDoors.Select(PortalId).Concat(refusedWindows.Select(WindowId)));
                     int removed = portalPass.DropWithDependents(refusedDoors, refusedWindows, "VBSP no longer puts it, or a window it needs, between two areas");
                     foreach (var w in refusedWindows)
                         left.Add(("window:" + ReviewLog.Anchor(w.Mins), "VBSP no longer puts it between two areas"));
@@ -211,6 +240,7 @@ namespace Viswright
                     var placed = BspVisibilityData.Load(compile.Bsp);
                     var invalid = AreaportalSelection.Invalid(portalPass, placed);
                     var invalidWindows = AreaportalSelection.InvalidWindows(portalPass, placed);
+                    fault.AddRange(invalid.Select(PortalId).Concat(invalidWindows.Select(WindowId)));
                     if (invalid.Count > 0)
                     {
                         portalPass.KeepOnly(portalPass.Added.Select(a => a.Portal).Except(invalid).ToHashSet(),
@@ -229,17 +259,35 @@ namespace Viswright
                 {
                     var refused = RefusedModels(run);
                     if (refused.Count > 0)
-                        retry += slimPass.RevertModels(refused);
+                    {
+                        int back = slimPass.RevertModels(refused);
+                        if (back > 0)
+                            fault.Add($"{back} prop(s) of {string.Join(", ", refused.Take(3))} VBSP will not take as static");
+                        retry += back;
+                    }
                     else if (slimPass.KeepsMapIds && MapIdsMoved(baseline, compile, slimPass) is { } moved)
                     {
                         Log.Warn($"pinned: {slimPass.Converted.Count} entit(ies) left as they are: {moved}");
+                        fault.Add($"{slimPass.Converted.Count} entit(ies) made static: {moved}");
                         retry += slimPass.Converted.Count;
                         slimPass.RevertAll();
                     }
                 }
                 if (retry == 0)
+                {
+                    clean = true;
                     break;
+                }
             }
+
+            // Every round but the last left something out and changed the map, so only a round that
+            // found nothing proves the copy: past the last round it may still leak, which compiles a
+            // map with no visibility, or have nothing compiled at all. A failure stops the compile.
+            if (!clean)
+                throw new InvalidOperationException(
+                    $"pinned: the accepted items still did not compile cleanly after {PinnedRounds} rounds, each leaving out what the round before found at fault; " +
+                    $"the last found {string.Join(", ", fault.Take(8))}{(fault.Count > 8 ? $" and {fault.Count - 8} more" : "")}. " +
+                    $"Deny those in {decisions.Path}, or run a review to decide again on the map as it is now.");
 
             if (compile == null || BspSpace.CollisionDifferences(BspSpace.Load(compile.Bsp).CollisionShapes(CollisionMask)
                     .Where(s => portalPass == null || !portalPass.IsStandIn(s)).ToList(), collision) is > 0 and var changed && changed > 0)
