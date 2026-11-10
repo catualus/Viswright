@@ -132,5 +132,27 @@ namespace Viswright
             lock (gate)
                 return new CompileRun(process.ExitCode, output.ToList(), watch.Elapsed);
         }
+
+        /// <summary>
+        /// Deletes the compile's folder. Only for a compile that has a folder to itself, such as one
+        /// trial of a search, once what it was for has been read from it: a big map's VMF, BSP and
+        /// portal file come to some 50 MB, and a search makes hundreds.
+        /// </summary>
+        public void Discard() => DeleteFolder(Path.GetDirectoryName(Vmf)!);
+
+        /// <summary>
+        /// Deletes a folder and everything in it, if it can. A file something else still holds open is
+        /// left for the next run to clear rather than failing this one.
+        /// </summary>
+        internal static void DeleteFolder(string folder)
+        {
+            try
+            {
+                if (Directory.Exists(folder))
+                    Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 }

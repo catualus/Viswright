@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="bench/Viswright.Bench/Viswright.Bench.csproj" />
   <Project Path="Viswright.Tests/Viswright.Tests.csproj" />
   <Project Path="Viswright/Viswright.csproj" />
   <Project Path="ViswrightCli/ViswrightCli.csproj" />

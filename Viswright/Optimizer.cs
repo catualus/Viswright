@@ -128,10 +128,22 @@ namespace Viswright
 
             int detailed = 0, nodrawn = 0, portals = 0;
             ReviewLog? found = null;
-            if (mode == RunMode.Pinned)
-                (detailed, nodrawn, portals) = RunPinned(options, working, copy, guard, decisions);
-            else if (anyPass)
-                (detailed, nodrawn, portals, found) = RunPasses(mode == RunMode.Review ? options with { Review = true } : options, working, copy, guard);
+            // The compiles a run checks its passes with are read by that run alone, and a big map's come
+            // to gigabytes. They are cleared when it ends, however it ends, and before it starts, for
+            // whatever a run that was killed left behind.
+            string work = Path.Combine(Path.GetDirectoryName(copy)!, "work");
+            ClearWork(work);
+            try
+            {
+                if (mode == RunMode.Pinned)
+                    (detailed, nodrawn, portals) = RunPinned(options, working, copy, guard, decisions);
+                else if (anyPass)
+                    (detailed, nodrawn, portals, found) = RunPasses(mode == RunMode.Review ? options with { Review = true } : options, working, copy, guard);
+            }
+            finally
+            {
+                ClearWork(work);
+            }
 
             var changes = VmfDiff.Compare(original, working);
             var undeclared = guard.Undeclared(changes);
@@ -223,6 +235,9 @@ namespace Viswright
             // step that needs one uses it rather than compiling the same map again.
             WorkCompile lastVis = baseline;
             WorkCompile latest = baseline;
+            // The entities the map came with. The passes add theirs after them all, made again on every
+            // compile, so only these have a place in the entity list that Lua can have saved.
+            var mapEntities = working.Entities.ToHashSet();
             if (options.Areaportals)
             {
                 portals = RunAreaportals(working, copy, Path.Combine(work, "areaportals"), name, tools, baseline, samples, collision, content, guard,
@@ -231,6 +246,10 @@ namespace Viswright
                 {
                     reference = lastVis = latest = portalCompile;
                     current = CompileMeasure.Of(portalCompile, samples);
+                    // The window stand-ins are brushes the baseline does not have; the passes after this one
+                    // are checked against the map with them in, or every one of them would be undone.
+                    if (portals > 0)
+                        collision = BspSpace.Load(portalCompile.Bsp).CollisionShapes(CollisionMask);
                 }
                 Lap("areaportals");
             }
@@ -350,7 +369,7 @@ namespace Viswright
             }
             if (options.Slim)
             {
-                RunSlimming(working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard, review, latest, luaScan!.Result);
+                RunSlimming(working, copy, Path.Combine(work, "slim"), name, tools, collision, content, guard, review, latest, luaScan!.Result, baseline, mapEntities);
                 Lap("slim");
             }
 
@@ -412,7 +431,8 @@ namespace Viswright
         }
 
         private static void RunSlimming(VmfDocument working, string copy, string folder, string name,
-            Toolchain tools, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard, ReviewLog review, WorkCompile latest, LuaGuard lua)
+            Toolchain tools, List<BspSpace.BrushShape> collision, GameContent content, ChangeGuard guard, ReviewLog review, WorkCompile latest, LuaGuard lua,
+            WorkCompile baseline, IReadOnlySet<VmfNode> mapEntities)
         {
             void Report(SlimmingPass pass, string? undone)
             {
@@ -434,13 +454,14 @@ namespace Viswright
             Log.Info($"slim: {lua.FilesScanned:N0} Lua file(s) scanned; {lua.Classes.Count} class(es) looked up by class name");
 
             var pass = new SlimmingPass();
-            int count = pass.Apply(working, content, lua);
+            int count = pass.Apply(working, content, lua, mapEntities);
             foreach (var (why, many) in pass.Skipped.OrderByDescending(kv => kv.Value).Take(8))
                 Log.Info($"  {many} left as entities: {why}");
             foreach (var (cls, lookup, file) in pass.Protected)
                 Log.Info($"  {cls} protected: Lua looks up \"{lookup}\" in {file}");
             if (pass.LightingChanges > 0)
                 Log.Info($"  {pass.LightingChanges} func_brush left alone: as func_detail it would cast a lightmap shadow it does not cast now");
+            WarnMapIds("slim", lua, pass);
             if (count == 0)
             {
                 Report(pass, null);
@@ -493,11 +514,47 @@ namespace Viswright
                 return;
             }
 
+            // The choice was made from the VMF's order; what VBSP wrote is the proof. Every entity of the
+            // map as it is must sit where it did, the entities the passes add coming after them all.
+            if (pass.KeepsMapIds && MapIdsMoved(baseline, compile, pass) is { } moved)
+            {
+                Report(pass, $"the pass was undone: {moved}");
+                pass.RevertAll();
+                Log.Warn($"slim: undone, {moved}");
+                return;
+            }
+
             pass.Declare(guard);
             Report(pass, null);
             Log.Check($"slim: {props} prop_dynamic made prop_static, {brushes} func_brush made func_detail: {pass.Converted.Count} fewer entities" +
-                (back > 0 ? $" ({back} put back: VBSP would not take their model as static)" : ""));
+                (back > 0 ? $" ({back} put back: VBSP would not take their model as static)" : "") +
+                (pass.KeepsMapIds ? $"; every map entity keeps its MapCreationID ({pass.KeptForMapIds} kept as entities for it)" : ""));
         }
+
+        /// <summary>
+        /// Says, loudly, that Lua finds map entities by MapCreationID and how many entities the pass kept
+        /// for it, with the files that do it.
+        /// </summary>
+        private static void WarnMapIds(string step, LuaGuard lua, SlimmingPass pass)
+        {
+            if (!lua.UsesMapIds)
+                return;
+            Log.Warn($"{step}: Lua finds map entities by MapCreationID, their place in the BSP's entity list, in {lua.MapIdFiles.Count} file(s); " +
+                "DarkRP keeps its doors by it and keypad addons their links. Only entities with no map entity after them are made static: " +
+                $"{pass.KeptForMapIds} that qualified are kept as entities so no ID changes");
+            foreach (string file in lua.MapIdFiles.Take(6))
+                Log.Info($"  MapCreationID used in {file}");
+            if (lua.MapIdFiles.Count > 6)
+                Log.Info($"  and {lua.MapIdFiles.Count - 6} more file(s)");
+        }
+
+        /// <summary>
+        /// How a map entity would move in <paramref name="compile"/>'s entity list against the map as it is,
+        /// leaving aside the entities <paramref name="pass"/> converted; null when none would.
+        /// </summary>
+        private static string? MapIdsMoved(WorkCompile baseline, WorkCompile compile, SlimmingPass pass) =>
+            SlimmingPass.Renumbered(SlimmingPass.EntityList(baseline.Bsp), SlimmingPass.EntityList(compile.Bsp),
+                pass.Converted.Select(c => c.Entity.Id).OfType<long>().Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToHashSet());
 
         /// <summary>How far from a detailed brush standing points count as around it.</summary>
         private const double DetailReach = 384;
@@ -637,7 +694,8 @@ namespace Viswright
                 rounds.Add((tries, WorkCompile.Prepare(working, copy, $"{folder}-{round + 1}", name)));
                 pass.RevertAll();
             }
-            var compiled = new WorkCompile?[rounds.Count];
+            // What each height's points see, measured as soon as its VVIS ends so that its folder can go.
+            var compiled = new double[]?[rounds.Count];
             int started = 0;
             using (var lanes = new System.Threading.SemaphoreSlim(HintLanes))
             {
@@ -661,28 +719,34 @@ namespace Viswright
                             var c = rounds[r].Compile;
                             if (c.RunVbsp(tools).Succeeded && !c.Leaked && c.RunVvis(tools).Succeeded)
                             {
-                                compiled[r] = c;
+                                compiled[r] = CompileMeasure.PerPoint(c, samples);
                                 long took = (c.VbspRun!.Elapsed + c.VvisRun!.Elapsed).Ticks;
                                 lock (compiled)
                                     slowest = TimeSpan.FromTicks(Math.Max(slowest.Ticks, took / HintLanes));
                             }
                         }
-                        finally { lanes.Release(); }
+                        finally
+                        {
+                            rounds[r].Compile.Discard();
+                            lanes.Release();
+                        }
                     }));
                 }
                 System.Threading.Tasks.Task.WaitAll(running.ToArray());
             }
+            // The heights time ran out for were written out but never compiled.
+            foreach (var (_, unused) in rounds.Skip(started))
+                unused.Discard();
             SourceKitConcurrency.ThrowIfCancelled();
 
             for (int round = 0; round < started; round++)
             {
-                var (tries, compile) = (rounds[round].Tries, compiled[round]);
-                if (compile == null)
+                var (tries, cost) = (rounds[round].Tries, compiled[round]);
+                if (cost == null)
                 {
                     Log.Warn($"hints: height {round + 1} did not compile cleanly; skipped");
                     continue;
                 }
-                var cost = CompileMeasure.PerPoint(compile, samples);
                 int better = 0;
                 foreach (var (square, height) in tries)
                 {
@@ -749,7 +813,8 @@ namespace Viswright
 
             pass.Declare(guard);
             Report(null);
-            string list = Path.Combine(folder, "hints.txt");
+            // Beside the work folders rather than in this compile's: those are cleared when the run ends.
+            string list = Path.Combine(Path.GetDirectoryName(folder)!, "hints.txt");
             File.WriteAllLines(list, pass.Placed.OrderBy(kv => kv.Key.X).ThenBy(kv => kv.Key.Y)
                 .Select(kv => $"{kv.Key.Mins.X:0} {kv.Key.Mins.Y:0} to {kv.Key.Maxs.X:0} {kv.Key.Maxs.Y:0} at z {kv.Value.Height:0}: {best[kv.Key].Gain:P1} less seen there"));
             Log.Check($"hints: {pass.Placed.Count} kept; triangles visible from a standing position {before.SampledTriangles:N0} -> {after!.SampledTriangles:N0} " +
@@ -1099,6 +1164,21 @@ namespace Viswright
             double dy = Math.Max(0, Math.Max(lo.Y - p.Y, p.Y - hi.Y));
             double dz = Math.Max(0, Math.Max(lo.Z - p.Z, p.Z - hi.Z));
             return Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        /// <summary>
+        /// Deletes every compile folder in <paramref name="work"/> but the baseline, which the next run
+        /// reuses while the map is unchanged. Nothing else in it is read once a run ends: a review is
+        /// drawn from its compiles before the run ends, and a pinned run needs only the baseline. The
+        /// files beside the folders - the lists of fades and hints the log points to - stay.
+        /// </summary>
+        private static void ClearWork(string work)
+        {
+            if (!Directory.Exists(work))
+                return;
+            foreach (string folder in Directory.GetDirectories(work))
+                if (!string.Equals(Path.GetFileName(folder), "baseline", StringComparison.OrdinalIgnoreCase))
+                    WorkCompile.DeleteFolder(folder);
         }
 
         /// <summary>

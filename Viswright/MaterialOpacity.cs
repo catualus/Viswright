@@ -37,33 +37,8 @@ namespace Viswright
 
         private bool Decide(string material, int depth)
         {
-            if (depth > 4 || material.StartsWith("TOOLS/", StringComparison.OrdinalIgnoreCase))
+            if (Resolve(material, depth) is not (var shader, var keys))
                 return false;
-
-            string path = "materials/" + material.Replace('\\', '/').ToLowerInvariant();
-            if (!path.EndsWith(".vmt", StringComparison.Ordinal))
-                path += ".vmt";
-            var bytes = read(path);
-            if (bytes == null)
-                return false;
-
-            var (shader, keys) = Parse(Encoding.Latin1.GetString(bytes));
-            if (shader.Equals("patch", StringComparison.OrdinalIgnoreCase))
-            {
-                // A patch material is its include with some keys changed; the changes win.
-                if (!keys.TryGetValue("include", out string? include))
-                    return false;
-                foreach (var key in SeeThroughKeys)
-                    if (IsOn(keys, key))
-                        return false;
-                if (keys.TryGetValue("$alpha", out string? patchAlpha) && Number(patchAlpha) < 1)
-                    return false;
-                string included = include.Replace('\\', '/');
-                if (included.StartsWith("materials/", StringComparison.OrdinalIgnoreCase))
-                    included = included["materials/".Length..];
-                return Decide(included, depth + 1);
-            }
-
             if (!OpaqueShaders.Contains(shader))
                 return false;
             foreach (var key in SeeThroughKeys)
@@ -74,33 +49,102 @@ namespace Viswright
             return true;
         }
 
+        /// <summary>
+        /// The shader a material draws with and its keys, or null when it cannot be found or read. A
+        /// patch material is its include with the patch's changes made.
+        /// </summary>
+        private (string Shader, Dictionary<string, string> Keys)? Resolve(string material, int depth)
+        {
+            if (depth > 4 || material.StartsWith("TOOLS/", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            string path = "materials/" + material.Replace('\\', '/').ToLowerInvariant();
+            if (!path.EndsWith(".vmt", StringComparison.Ordinal))
+                path += ".vmt";
+            var bytes = read(path);
+            if (bytes == null)
+                return null;
+
+            var (shader, keys, blocks) = Parse(Encoding.Latin1.GetString(bytes));
+            if (!shader.Equals("patch", StringComparison.OrdinalIgnoreCase))
+                return (shader, keys);
+
+            if (!keys.TryGetValue("include", out string? include))
+                return null;
+            string included = include.Replace('\\', '/');
+            if (included.StartsWith("materials/", StringComparison.OrdinalIgnoreCase))
+                included = included["materials/".Length..];
+            if (Resolve(included, depth + 1) is not (var baseShader, var baseKeys))
+                return null;
+
+            // The changes sit in an insert block and a replace block, applied in that order whatever
+            // order the file has them in. The engine's replace only changes keys the include already
+            // has; here it changes any key, which can only make a material see-through that is not,
+            // and an opaque material judged see-through costs no more than a face left drawn.
+            var merged = new Dictionary<string, string>(baseKeys, StringComparer.OrdinalIgnoreCase);
+            foreach (string block in new[] { "insert", "replace" })
+                if (blocks.TryGetValue(block, out var changes))
+                    foreach (var (key, value) in changes)
+                        merged[key] = value;
+            // A key written in the patch outside both blocks is not one the engine reads, but one that
+            // would let the world show through is believed rather than ignored.
+            foreach (var key in SeeThroughKeys)
+                if (IsOn(keys, key))
+                    merged[key] = keys[key];
+            if (keys.TryGetValue("$alpha", out string? patchAlpha) && Number(patchAlpha) < 1)
+                merged["$alpha"] = patchAlpha;
+            return (baseShader, merged);
+        }
+
         private static bool IsOn(Dictionary<string, string> keys, string key) =>
             keys.TryGetValue(key, out string? value) && Number(value) != 0;
 
         private static double Number(string value) =>
             double.TryParse(value.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) ? d : 1;
 
-        /// <summary>The shader name and the top-level keys (nested blocks such as proxies are skipped).</summary>
-        internal static (string Shader, Dictionary<string, string> Keys) Parse(string text)
+        /// <summary>
+        /// The shader name, the top-level keys, and the keys directly inside each top-level block by the
+        /// block's name, such as a patch's insert and replace. Anything nested deeper, such as each
+        /// proxy's settings, is skipped.
+        /// </summary>
+        internal static (string Shader, Dictionary<string, string> Keys, Dictionary<string, Dictionary<string, string>> Blocks) Parse(string text)
         {
             var tokens = Tokens(text);
             var keys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var blocks = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
             if (tokens.Count == 0)
-                return ("", keys);
+                return ("", keys, blocks);
 
             string shader = tokens[0];
             int depth = 0;
+            Dictionary<string, string>? block = null;
             for (int i = 1; i < tokens.Count; i++)
             {
-                if (tokens[i] == "{") { depth++; continue; }
-                if (tokens[i] == "}") { depth--; continue; }
-                if (depth == 1 && i + 1 < tokens.Count && tokens[i + 1] != "{" && tokens[i + 1] != "}")
+                if (tokens[i] == "{")
                 {
-                    keys[tokens[i]] = tokens[i + 1];
+                    depth++;
+                    // The token before a block's brace is its name.
+                    if (depth == 2)
+                    {
+                        if (!blocks.TryGetValue(tokens[i - 1], out block))
+                            blocks[tokens[i - 1]] = block = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    }
+                    continue;
+                }
+                if (tokens[i] == "}")
+                {
+                    depth--;
+                    if (depth < 2)
+                        block = null;
+                    continue;
+                }
+                if (depth is 1 or 2 && i + 1 < tokens.Count && tokens[i + 1] != "{" && tokens[i + 1] != "}")
+                {
+                    (depth == 1 ? keys : block!)[tokens[i]] = tokens[i + 1];
                     i++;
                 }
             }
-            return (shader, keys);
+            return (shader, keys, blocks);
         }
 
         private static List<string> Tokens(string text)

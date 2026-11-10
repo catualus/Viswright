@@ -124,6 +124,9 @@ namespace Viswright
         /// <summary>Triangles drawn from a standing point on average, every portal as it is.</summary>
         public double Average => points.Length == 0 ? 0 : baseline.Average();
 
+        /// <summary>Triangles drawn from each measured standing point, every portal as it is.</summary>
+        public IReadOnlyList<double> PerPoint => baseline;
+
         /// <summary>Triangles drawn on average with the portals in <paramref name="absent"/> taken out.</summary>
         public double AverageWithout(IReadOnlySet<int> absent) =>
             points.Length == 0 ? 0 : Average + Value(absent);
@@ -224,6 +227,10 @@ namespace Viswright
                     {
                         int slot = vis.Faces.Count + prop;
                         if (stamp[slot] == mark)
+                            continue;
+                        // a prop past its fade distance is not drawn at all
+                        var placed = vis.StaticProps[prop];
+                        if (placed.FadeMax > 0 && (placed.Origin - eye).Length > placed.FadeMax)
                             continue;
                         stamp[slot] = mark;
                         drawn += propTriangles[prop];

@@ -103,6 +103,10 @@ namespace Viswright.Tests
             var brush = VmfBrush.Build(portal.Child("solid")!)!;
             Assert.Equal(new SourceKit.Geometry.Vec3(254, 95, 15), brush.Mins);
             Assert.Equal(new SourceKit.Geometry.Vec3(258, 161, 113), brush.Maxs);
+
+            // The pass's compiles are cleared once the run ends; the baseline stays for the next run.
+            string work = Path.Combine(Path.GetDirectoryName(result.CopyPath!)!, "work");
+            Assert.Equal("baseline", Path.GetFileName(Assert.Single(Directory.GetDirectories(work))));
         }
 
         [Fact]
@@ -124,6 +128,25 @@ namespace Viswright.Tests
             var brush = VmfBrush.Build(portal.Child("solid")!)!;
             Assert.Equal(249.5, brush.Mins.X);
             Assert.Equal(250.5, brush.Maxs.X);
+        }
+
+        [Fact]
+        public void PassesAfterAWindowPortalAreNotUndoneByItsStandIn()
+        {
+            var tools = Tools();
+            if (tools == null)
+                return;
+            using var ws = new Workspace();
+            // a detail crate on the floor, whose underside the nodraw pass hides
+            string crate = "entity\r\n{\r\n\t\"id\" \"60\"\r\n\t\"classname\" \"func_detail\"\r\n" + Box(64, 64, 16, 128, 128, 64) + "}\r\n";
+            string map = ws.Write(@"maps\vw_windowpasses.vmf", TwoRooms(window: true) + crate);
+
+            Optimizer.Run(new OptimizeOptions { Input = map, Areaportals = true, Nodraw = true, Tools = tools });
+
+            // the window's stand-in is a brush the first compile does not have; it is no change of collision
+            Assert.Contains(ws.Output, l => l.Contains("fading"));
+            Assert.DoesNotContain(ws.Output, l => l.Contains("collision changed"));
+            Assert.True(ws.Output.Any(l => l.Contains("hidden face(s) made nodraw")), string.Join(" | ", ws.Output.Where(l => l.Contains("nodraw"))));
         }
 
         [Fact]

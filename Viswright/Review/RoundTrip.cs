@@ -51,8 +51,11 @@ namespace Viswright.Review
 
                 if (item.TryGetProperty("nodes", out var nodes) && nodes.GetArrayLength() > 0)
                 {
-                    var mine = nodes.EnumerateArray().Select(n => n.GetInt64()).ToList();
-                    if (!mine.Any(present.ContainsKey))
+                    // The first node is what the item added - a portal, a hint, a prop made static. Any after
+                    // it came along with it: a door the portal gave a name, a window's stand-in. Deleting the
+                    // portal denies the item whatever is left of those, and only its own brush says where
+                    // the mapper moved it; a door's brush is not the doorway.
+                    if (!present.TryGetValue(nodes[0].GetInt64(), out var own))
                     {
                         if (known.Decision != Decision.Deny)
                         {
@@ -61,7 +64,7 @@ namespace Viswright.Review
                         }
                         continue;
                     }
-                    if (Moved(pass, present[mine.First(present.ContainsKey)], known) is { } altered)
+                    if (Moved(pass, own, known) is { } altered)
                     {
                         decisions.Set(id, _ => altered);
                         changed++;
@@ -101,6 +104,17 @@ namespace Viswright.Review
             {
                 if ((brush.Mins - item.Mins).Length < 0.5 && (brush.Maxs - item.Maxs).Length < 0.5)
                     return null;
+                // A window is put back from its corners (DecisionFile.Window), not from a doorway's
+                // extents; its portal brush is the opening itself.
+                if (item.Data.ContainsKey("x0"))
+                {
+                    var corners = new Dictionary<string, double>(item.Data)
+                    {
+                        ["x0"] = brush.Mins.X, ["y0"] = brush.Mins.Y, ["z0"] = brush.Mins.Z,
+                        ["x1"] = brush.Maxs.X, ["y1"] = brush.Maxs.Y, ["z1"] = brush.Maxs.Z,
+                    };
+                    return item with { Data = corners, Mins = brush.Mins, Maxs = brush.Maxs, Altered = true, Decision = Decision.Accept };
+                }
                 bool alongX = axis == 0;
                 var data = new Dictionary<string, double>(item.Data)
                 {

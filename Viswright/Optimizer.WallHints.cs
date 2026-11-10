@@ -49,7 +49,7 @@ namespace Viswright
                 left.RemoveAll(batch.Contains);
             }
 
-            var compiled = new (List<WallHint> Batch, WorkCompile? Compile)[batches.Count];
+            var compiled = new (List<WallHint> Batch, double[]? Cost)[batches.Count];
             TimeSpan slowest = reference.VbspRun is { } rv && reference.VvisRun is { } rvv ? rv.Elapsed + rvv.Elapsed : TimeSpan.FromMinutes(1);
             int started = 0;
             using (var lanes = new System.Threading.SemaphoreSlim(HintLanes))
@@ -82,13 +82,19 @@ namespace Viswright
                         {
                             if (compile.RunVbsp(tools).Succeeded && !compile.Leaked && compile.RunVvis(tools).Succeeded)
                             {
-                                compiled[index] = (batches[index], compile);
+                                // Measured as soon as VVIS ends, so that the batch's folder can go at
+                                // once instead of hundreds of them piling up until the search ends.
+                                compiled[index] = (batches[index], CompileMeasure.PerPoint(compile, samples));
                                 long took = (compile.VbspRun!.Elapsed + compile.VvisRun!.Elapsed).Ticks;
                                 lock (compiled)
                                     slowest = TimeSpan.FromTicks(Math.Max(slowest.Ticks, took / HintLanes));
                             }
                         }
-                        finally { lanes.Release(); }
+                        finally
+                        {
+                            compile.Discard();
+                            lanes.Release();
+                        }
                     }));
                 }
                 System.Threading.Tasks.Task.WaitAll(running.ToArray());
@@ -110,10 +116,9 @@ namespace Viswright
             var gains = new Dictionary<WallHint, double>();
             for (int b = 0; b < started; b++)
             {
-                var (batch, compile) = compiled[b];
-                if (compile == null)
+                var (batch, cost) = compiled[b];
+                if (cost == null)
                     continue;
-                var cost = CompileMeasure.PerPoint(compile, samples);
                 foreach (var h in batch)
                     gains[h] = Gain(h.Points, referenceCost, cost);
             }

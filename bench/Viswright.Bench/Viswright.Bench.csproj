@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The benchmark's own tools: strip a map of its optimisation, find where a player stands, and
+       measure a compile at those places. Not shipped in the plugin; see docs/benchmark.md. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>viswright-bench</AssemblyName>
+    <RootNamespace>Viswright.Bench</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Viswright\Viswright.csproj" />
+  </ItemGroup>
+
+</Project>

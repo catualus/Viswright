@@ -13,6 +13,12 @@ namespace Viswright
     /// <c>ent:GetClass() == "prop_dynamic"</c>). An entity turned into a static prop or into func_detail
     /// is no longer an entity at all, so Lua that looks for its class finds one fewer. Any class the
     /// scanned Lua mentions in a lookup is protected, and the passes leave entities of it alone.
+    ///
+    /// Lua can also find map entities by number. <c>ent:MapCreationID()</c> and
+    /// <c>ents.GetMapCreatedEntity(id)</c> go by an entity's place in the BSP's entity list, and DarkRP
+    /// keeps its door titles, owners and job doors by it, as keypad addons keep their links. An entity
+    /// taken out of that list moves every one after it down a place, so saved data lands on the wrong
+    /// door. Files that use either are noted, and the passes keep every map entity in its place.
     /// </summary>
     public sealed class LuaGuard
     {
@@ -22,8 +28,24 @@ namespace Viswright
             @"(?:FindByClass\s*\(\s*|GetClass\s*\(\s*\)\s*[=~]=\s*|ClassName\s*[=~]=\s*)[""']([A-Za-z0-9_*]+)[""']",
             RegexOptions.Compiled);
 
+        private static readonly Regex MapIdLookup = new(@"\b(?:MapCreationID|GetMapCreatedEntity)\b", RegexOptions.Compiled);
+
+        /// <summary>
+        /// The ID copied into a field of the same name, as the game's own duplicator does in every copy it
+        /// makes, "for addons to determine if the entity was map spawned". That alone finds nothing; Lua
+        /// that reads the ID back names MapCreationID again, or calls GetMapCreatedEntity, and is caught.
+        /// Without this every install would count, since the duplicator ships with the game.
+        /// </summary>
+        private static readonly Regex MapIdCopy = new(@"\.\s*MapCreationID\s*=(?!=)\s*[A-Za-z_][\w.]*\s*:\s*MapCreationID\s*\(\s*\)", RegexOptions.Compiled);
+
         /// <summary>Classes some scanned Lua looks entities up by, with a file that does it.</summary>
         public Dictionary<string, string> Classes { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Every scanned file that finds map entities by MapCreationID, in folder order.</summary>
+        public List<string> MapIdFiles { get; } = [];
+
+        /// <summary>Whether some scanned Lua finds map entities by their place in the entity list.</summary>
+        public bool UsesMapIds => MapIdFiles.Count > 0;
 
         public int FilesScanned { get; private set; }
 
@@ -38,6 +60,7 @@ namespace Viswright
             // Reading sixteen thousand small files one after another leaves the cores waiting on the
             // disk; read them at once, and keep for each class the first file in folder order.
             var found = new List<string>[files.Count];
+            var mapIds = new bool[files.Count];
             System.Threading.Tasks.Parallel.For(0, files.Count, SourceKitConcurrency.Options, i =>
             {
                 string text;
@@ -47,10 +70,15 @@ namespace Viswright
                 var classes = ClassLookup.Matches(text).Select(m => m.Groups[1].Value).ToList();
                 if (classes.Count > 0)
                     found[i] = classes;
+                mapIds[i] = MapIdLookup.IsMatch(MapIdCopy.Replace(text, ""));
             });
             for (int i = 0; i < files.Count; i++)
+            {
                 foreach (string cls in found[i] ?? [])
                     guard.Classes.TryAdd(cls, files[i]);
+                if (mapIds[i])
+                    guard.MapIdFiles.Add(files[i]);
+            }
             return guard;
         }
 

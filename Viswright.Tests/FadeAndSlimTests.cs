@@ -227,6 +227,164 @@ namespace Viswright.Tests
         }
 
         [Fact]
+        public void LuaThatFindsMapEntitiesByNumberIsNoted()
+        {
+            string folder = Path.Combine(Path.GetTempPath(), "viswright-lua-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try
+            {
+                // DarkRP's doors, a keypad addon's links, and a comparison with a saved ID all find
+                // entities by number.
+                File.WriteAllText(Path.Combine(folder, "a_doors.lua"),
+                    "function meta:doorIndex()\n    return self:CreatedByMap() and self:MapCreationID() or nil\nend\n");
+                File.WriteAllText(Path.Combine(folder, "b_keypads.lua"), "local ent = ents.GetMapCreatedEntity(num)\n");
+                File.WriteAllText(Path.Combine(folder, "c_compare.lua"), "if saved.MapCreationID == ent:MapCreationID() then end\n");
+                // The game's own duplicator only copies the ID into what it saves, for addons to read.
+                File.WriteAllText(Path.Combine(folder, "d_duplicator.lua"),
+                    "if ( ent:CreatedByMap() ) then\n\tdata.MapCreationID = ent:MapCreationID()\nend\n");
+                File.WriteAllText(Path.Combine(folder, "e_other.lua"), "print(ent:EntIndex())\n");
+
+                var lua = LuaGuard.Scan([folder]);
+
+                Assert.True(lua.UsesMapIds);
+                Assert.Equal(["a_doors.lua", "b_keypads.lua", "c_compare.lua"], lua.MapIdFiles.Select(f => Path.GetFileName(f)).Order());
+                Assert.Empty(lua.Classes);
+            }
+            finally
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+            Assert.False(new LuaGuard().UsesMapIds);
+        }
+
+        /// <summary>
+        /// Four candidates around a door: the first comes before the door, the rest only before classes
+        /// VBSP leaves out of the entity list (a prop_static, an unnamed overlay, a cubemap).
+        /// </summary>
+        private static string AroundADoor() =>
+            Entity(20, "prop_dynamic", ("model", "models/bench.mdl")) +
+            Entity(21, "prop_door_rotating", ("model", "models/door.mdl")) +
+            Entity(22, "prop_dynamic", ("model", "models/bench.mdl")) +
+            Entity(23, "prop_static", ("model", "models/bench.mdl")) +
+            Entity(24, "info_overlay", ("material", "decals/x")) +
+            Entity(25, "prop_dynamic", ("model", "models/bench.mdl")) +
+            Entity(26, "func_brush", ("vrad_brush_cast_shadows", "1")) +
+            Entity(27, "env_cubemap");
+
+        private static LuaGuard MapIdLua() => new() { MapIdFiles = { "sv_doors.lua" } };
+
+        [Fact]
+        public void WithLuaUsingMapCreationIdOnlyEntitiesNothingStaysAfterAreConverted()
+        {
+            var content = Content(("models/bench.mdl", Mdl(new Vec3(-32, -8, 0), new Vec3(32, 8, 32), StaticPropFlag)));
+
+            // Without it, every candidate goes.
+            var free = Map(AroundADoor());
+            Assert.Equal(4, new SlimmingPass().Apply(free, content, new LuaGuard()));
+
+            var map = Map(AroundADoor());
+            var pass = new SlimmingPass();
+            Assert.Equal(3, pass.Apply(map, content, MapIdLua()));
+
+            Assert.True(pass.KeepsMapIds);
+            Assert.Equal(1, pass.KeptForMapIds);
+            Assert.Equal(["prop_dynamic", "prop_door_rotating", "prop_static", "prop_static", "info_overlay", "prop_static", "func_detail", "env_cubemap"],
+                map.Entities.Select(e => e.Classname));
+            // The one kept is in the review, saying why.
+            var (kept, why) = Assert.Single(pass.SkippedEntities);
+            Assert.Equal(20L, kept.Id);
+            Assert.Contains("MapCreationID", why);
+            Assert.Contains("sv_doors.lua", why);
+        }
+
+        [Fact]
+        public void ANamedOverlayOrAnInstanceStaysAfterTheCandidates()
+        {
+            var content = Content(("models/bench.mdl", Mdl(new Vec3(-32, -8, 0), new Vec3(32, 8, 32), StaticPropFlag)));
+
+            // VBSP keeps a named overlay as info_overlay_accessor.
+            var named = Map(Entity(20, "prop_dynamic", ("model", "models/bench.mdl")) + Entity(21, "info_overlay", ("targetname", "sign")));
+            Assert.Equal(0, new SlimmingPass().Apply(named, content, MapIdLua()));
+
+            // VBSP adds an instance's entities after all of the map's own, wherever the func_instance is.
+            var instanced = Map(Entity(19, "func_instance", ("file", "instances/door.vmf")) + Entity(20, "prop_dynamic", ("model", "models/bench.mdl")));
+            Assert.Equal(0, new SlimmingPass().Apply(instanced, content, MapIdLua()));
+            Assert.Equal(1, new SlimmingPass().Apply(Map(Entity(19, "func_instance", ("file", "instances/door.vmf")) + Entity(20, "prop_dynamic", ("model", "models/bench.mdl"))),
+                content, new LuaGuard()));
+        }
+
+        [Fact]
+        public void EntitiesThePassesAddAfterTheMapsOwnDoNotHoldItsEndBack()
+        {
+            var content = Content(("models/bench.mdl", Mdl(new Vec3(-32, -8, 0), new Vec3(32, 8, 32), StaticPropFlag)));
+            VmfDocument WithPortal(out HashSet<VmfNode> own)
+            {
+                var doc = Map(Entity(20, "prop_door_rotating") + Entity(21, "prop_dynamic", ("model", "models/bench.mdl")));
+                own = doc.Entities.ToHashSet();
+                // The areaportal pass adds its portals at the end of the VMF, as it does.
+                var portal = new VmfNode("entity");
+                doc.Root.Add(portal);
+                portal.Set("id", "900");
+                portal.Set("classname", "func_areaportal");
+                return doc;
+            }
+
+            var map = WithPortal(out var own);
+            Assert.Equal(1, new SlimmingPass().Apply(map, content, MapIdLua(), own));
+            Assert.Equal("prop_static", map.Entities.ElementAt(1).Classname);
+
+            // Counted as one of the map's own, the portal would hold the prop back.
+            Assert.Equal(0, new SlimmingPass().Apply(WithPortal(out _), content, MapIdLua()));
+        }
+
+        [Fact]
+        public void PuttingAnEntityBackPutsBackTheOnesBeforeIt()
+        {
+            var content = Content(("models/bench.mdl", Mdl(new Vec3(-32, -8, 0), new Vec3(32, 8, 32), StaticPropFlag)));
+            var map = Map(AroundADoor());
+            var pass = new SlimmingPass();
+            pass.Apply(map, content, MapIdLua());
+
+            // Denied in the review: 25 stays an entity, so 22 before it would move it.
+            Assert.Equal(1, pass.RevertWhere(e => e.Id == 25));
+            Assert.Equal([26L], pass.Converted.Select(c => c.Entity.Id!.Value));
+            Assert.Equal(2, pass.KeptForMapIds);
+
+            // VBSP refusing a model works the same way: the prop stays, and the func_brush before it with it.
+            var again = Map(Entity(21, "prop_door_rotating") + Entity(30, "func_brush", ("vrad_brush_cast_shadows", "1"))
+                + Entity(31, "prop_dynamic", ("model", "models/bench.mdl")));
+            var other = new SlimmingPass();
+            Assert.Equal(2, other.Apply(again, content, MapIdLua()));
+            Assert.Equal(1, other.RevertModels(new HashSet<string> { "models/bench.mdl" }));
+            Assert.Empty(other.Converted);
+            Assert.Equal(1, other.KeptForMapIds);
+            Assert.Equal(["prop_door_rotating", "func_brush", "prop_dynamic"], again.Entities.Select(e => e.Classname));
+        }
+
+        [Fact]
+        public void TheCompiledEntityListShowsWhetherAnyMapEntityMoved()
+        {
+            var before = SlimmingPass.EntityListOf(
+                "{\n\"world_maxs\" \"64 64 64\"\n\"classname\" \"worldspawn\"\n\"hammerid\" \"1\"\n}\n" +
+                "{\n\"classname\" \"prop_door_rotating\"\n\"hammerid\" \"21\"\n\"message\" \"a {brace} in a value\"\n}\n" +
+                "{\n\"classname\" \"prop_dynamic\"\n\"hammerid\" \"22\"\n}\n" +
+                "{\n\"hammerid\" \"25\"\n\"classname\" \"prop_dynamic\"\n}\n");
+            Assert.Equal([("1", "worldspawn"), ("21", "prop_door_rotating"), ("22", "prop_dynamic"), ("25", "prop_dynamic")], before);
+
+            // The end of the list converted, a portal added after: nothing moved.
+            var after = new List<(string?, string?)> { ("1", "worldspawn"), ("21", "prop_door_rotating"), ("900", "func_areaportal") };
+            Assert.Null(SlimmingPass.Renumbered(before, after, new HashSet<string> { "22", "25" }));
+
+            // 22 converted with 25 after it: 25 moves down a place.
+            var moved = SlimmingPass.Renumbered(before, [("1", "worldspawn"), ("21", "prop_door_rotating"), ("25", "prop_dynamic")], new HashSet<string> { "22" });
+            Assert.NotNull(moved);
+            Assert.Contains("prop_dynamic 25", moved);
+
+            // A list that could not be read proves nothing.
+            Assert.NotNull(SlimmingPass.Renumbered([], after, new HashSet<string>()));
+        }
+
+        [Fact]
         public void SlimmingIsDeclaredAndRevertsCleanly()
         {
             var content = Content(("models/bench.mdl", Mdl(new Vec3(-32, -8, 0), new Vec3(32, 8, 32), StaticPropFlag)));
