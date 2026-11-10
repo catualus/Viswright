@@ -13,6 +13,23 @@ namespace Viswright
     /// <summary>The compilers a run checks its changes with, and how to call them.</summary>
     public sealed record Toolchain(string Vbsp, string Vvis, string GameFolder, string VbspFlags = "", string VvisFlags = "")
     {
+        /// <summary>
+        /// The same tools for the trial compiles of a search, <paramref name="lanes"/> running at once:
+        /// the machine's threads shared between them, and, with VBSP++, no collision models or default
+        /// cubemaps, which a trial is not judged on. The compiles a search keeps are made with the
+        /// tools as they are.
+        /// </summary>
+        public Toolchain ForTrials(int lanes)
+        {
+            static bool PlusPlus(string exe) => Path.GetFileName(exe).Contains("++", StringComparison.Ordinal);
+            string threads = $" -threads {Math.Max(1, Environment.ProcessorCount / lanes)}";
+            return this with
+            {
+                VbspFlags = (VbspFlags + (PlusPlus(Vbsp) ? threads + " -nophysics -nodefaultcubemap" : "")).Trim(),
+                VvisFlags = (VvisFlags + (PlusPlus(Vvis) ? threads : "")).Trim(),
+            };
+        }
+
         public void Validate()
         {
             if (!File.Exists(Vbsp)) throw new FileNotFoundException($"VBSP not found at {Vbsp}.", Vbsp);
