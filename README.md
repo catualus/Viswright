@@ -108,96 +108,135 @@ to leak. The search needs VVIS++ and stops when its time (15 minutes by default)
 
 "More visible" is measured at the points a player can stand: positions at eye height above solid
 ground on a 128-unit grid, found once from the first compile, in open space joined to a spawn point or
-a teleport destination. A sealed room nobody can reach - prominence has a 16,384-unit box above the
-city - is left out. Two compiles do not share clusters, but they share these points, so the triangles
+a teleport destination. A sealed room nobody can reach, such as a box built above a city, is left
+out. Two compiles do not share clusters, but they share these points, so the triangles
 visible from each can be compared directly.
 
 Checking compiles use VBSP's default block size unless `-blocksize N` gives the one the real compile
-uses. It matters: on these maps a block size of 4,096 gives a fifth fewer clusters than 1,024, and a
+uses. It matters: on a city map a block size of 4,096 can give a fifth fewer clusters than 1,024, and a
 pass that helps at one can hurt at the other.
 
-Measured on 2026-11-01 with vbsp++ and vvis++ (default VBSP options, every floor counted):
+## Results
 
-| | rp_downtown_prominence_d | rp_downtown_meowy |
-| --- | --- | --- |
-| Brushes made func_detail | 507 of 515 candidates | 362 of 375 |
-| Clusters | 6,677 -> 6,289 | 6,174 -> 5,923 |
-| Portals | 16,310 -> 15,269 | 14,942 -> 14,471 |
-| Triangles visible from a standing position | 6,023 -> 6,021 | 6,701 -> 6,714 |
-| VVIS | 59.3 s -> 47.1 s | 55.1 s -> 51.2 s |
-| Faces made nodraw | 246 | 89 |
-| Collision | identical | identical |
-| Time the passes add | about 3.5 minutes | about 3.5 minutes |
+Measured on 2 and 3 November 2026 on fourteen well-known maps: the ten TF2 maps whose sources Valve
+released, and four of the most played DarkRP maps. The method is in
+[docs/benchmark.md](docs/benchmark.md). Every version of a map was compiled with the same tools,
+options and machine, three times over. Each figure below is the median of those three runs. vvis++ gave
+the same visibility every time, so only compile times have a range.
 
-With all three passes (2026-11-01):
+- **Seen**: the triangles in the PVS from a standing position, as a mean over every place a player can
+  stand (the **Points** column). The same points are used for every version of a map.
+- **Drawn**: the world and static-prop triangles the engine draws from those places, with areaportals
+  honoured, doors shut and windows shut past their fade. Props are most of it.
 
-| | rp_downtown_prominence_d | rp_downtown_meowy |
-| --- | --- | --- |
-| Areaportals added | 69, all closing with their door | 76, 70 closing |
-| Areaportal numbers used | 191 of 191 | 187 of 191 |
-| Brushes made func_detail | 452 | 310 |
-| Faces made nodraw | 246 | 89 |
-| VVIS portals | 16,310 -> 15,691 | 14,942 -> 15,019 |
-| VVIS | 62.8 s -> 44.8 s | 49.4 s -> 53.0 s |
-| Triangles visible from a standing position | 6,023 -> 6,016; 5,956 with the new doors shut | 6,701 -> 6,693; 6,626 with them shut |
-| Time the passes add | about 6.5 minutes | about 6.5 minutes |
+Percentages are against the first column; lower is better.
 
-The world triangles a shut door saves are few, because VVIS already hides most interiors from the street.
-What a closed areaportal also does - stop drawing the props and entities behind it, and stop the server
-sending them - is not in that figure.
+### Team Fortress 2
 
-With windows (2026-11-02, rp_downtown_meowy, areaportals alone): of 228 framed doorways, 86 divide their
-rooms only once the windows and gaps the rooms meet through have portals too, 104 of them (79 windows,
-25 passages). Within the 80 portals the map has room for, the set kept is 50 doors (43 closing with
-their door) and 23 windows (15 fading), 184 of 191 portal numbers. With every door shut, a standing
-position draws 41,139 triangles, world and props, against 43,799 without them: 6.1 % less. Props are
-most of what is drawn; the map's own 111 portals already save about a third. In Garry's Mod the windows
-show the street up close and black once shut.
+- **Stripped**: Valve's map with its hints, skips, areaportals, occluders and visclusters taken out.
+  func_detail is kept.
+- **Valve**: the map as Valve shipped it.
+- **Viswright**: Stripped run through Viswright with every pass on and every item accepted
+  (`-mode auto`).
 
-Fades and Fewer entities (2026-11-01, 6 pixels):
+| Map | Points | Stripped: seen / drawn | Valve: seen / drawn | Viswright: seen / drawn |
+| --- | ---: | ---: | ---: | ---: |
+| ctf_2fort | 2,961 | 5,579 / 211,894 | -12.0% / -18.9% | -18.1% / -18.9% |
+| cp_dustbowl | 4,885 | 7,283 / 126,830 | -10.1% / -6.3% | -10.9% / -4.7% |
+| cp_badlands | 3,807 | 10,582 / 237,346 | -25.3% / -26.1% | -18.8% / -15.9% |
+| cp_granary | 5,181 | 9,889 / 218,646 | -12.9% / -23.7% | -16.0% / -17.2% |
+| cp_gravelpit | 5,179 | 13,271 / 153,022 | -19.1% / -18.6% | -14.0% / -11.0% |
+| tc_hydro | 5,940 | 5,341 / 147,922 | -17.4% / -21.5% | -20.4% / -21.4% |
+| pl_badwater | 3,736 | 5,886 / 147,876 | -2.2% / -13.3% | -27.2% / -17.6% |
+| pl_goldrush | 6,520 | 8,221 / 168,208 | +15.7% / -7.7% | -9.9% / -8.2% |
+| arena_lumberyard | 3,361 | 22,870 / 276,906 | +9.8% / +2.7% | -24.5% / -18.1% |
+| arena_ravine | 1,204 | 17,624 / 241,687 | -10.6% / -8.7% | -7.4% / -4.9% |
 
-| | rp_downtown_prominence_d | rp_downtown_meowy |
-| --- | --- | --- |
-| Static props given a fade | 374 (mostly rebar debris, 5,000-10,000 units) | 29 (it already fades nearly all) |
-| prop_dynamic made prop_static | 30 | 23 |
-| Left as entities | named, parented, physgun-movable, physics models | the same, and 51 models not compiled for static use |
-| func_brush made func_detail | 0 (all never solid, named, or without lightmap shadows) | 0 |
+- **Seen.** Viswright's hints cut more than Valve's on seven of the ten maps. Three of those seven
+  (pl_badwater, pl_goldrush and arena_lumberyard) are partly Valve's choice: their 6 to 10
+  func_viscluster entities merge clusters to save VVIS time, and that lets more be seen. On two of them
+  Valve's version sees more than Stripped.
+- **Drawn.** Viswright is ahead on three maps, level on two and behind on five. The gap is areaportals.
+  Valve's designers place 1 to 134 a map, many opened by map logic. Viswright places 2 to 26, and only
+  where a door or opening provably divides two areas.
 
-Every pass, measured as the maps really compile (2026-11-01, `-blocksize 4096`, only places a player
-can reach):
+### Garry's Mod
 
-| | rp_downtown_prominence_d | rp_downtown_meowy |
-| --- | --- | --- |
-| Before | 5,338 clusters, 13,489 portals, 6,472 triangles visible, VVIS 22.6 s | 5,169 clusters, 12,925 portals, 6,941 triangles, VVIS 20.5 s |
-| Areaportals | 69 added; 6,484 triangles visible, 6,327 with the new doors shut | 74 added; 6,972, 6,798 with them shut |
-| Make detail, all candidates | 455 brushes: 6,626 triangles visible against 6,484 | 310 brushes: 7,084 against 6,972 |
-| Make detail, kept where no more is seen | 27 brushes: 6,473 | 33 brushes: 6,945 |
-| Hide covered faces | 219 faces | 92 faces |
-| Fades / Fewer entities | 374 props / 30 entities | 29 props / 23 entities |
-| Hints over open ground | undone: 0.3% less seen (6,441 against 6,460), under the 1% bar | undone: 0.8% less (6,913 against 6,968) |
-| Time | 12 minutes, 6 of them the hint search | 11 minutes |
+- **Plain**: the map's source compiled as it is.
+- **Shipped**: the author's own BSP from the Workshop, measured at the same points.
+- **Viswright**: the source run through Viswright with every pass on and every item accepted.
 
-At the block size these maps are really compiled with, detailing every candidate makes more visible
-from the streets: only about a fifth of what newly appears lies behind a brush that became detail, the
-rest is leaves merging. Keeping detail only where the points around each brush see no more leaves
-under a tenth of the candidates and changes almost nothing - VVIS++ already takes about 22 seconds on
-these maps, so there is little for detail to save. The figures from default options above do not carry
-over. Hints do
-not pay on either map: about 15 of 120 squares see 2% less on their own, but together they save under
-1%. The streets are walled in up to the sky, so there is little over the rooftops for a hint to cut
-off, and VVIS++'s leaves are already tight.
+Three of the sources are BSPSource 1.4.8 decompiles: rp_downtown_v4c_v2 (Workshop 110286060),
+rp_downtown_tits_v2 (1527403485) and rp_rockford_v2b (622810630). VBSP keeps no hint brushes, so a
+decompile has none. Plain is therefore the map without its author's hints, and Shipped shows what those
+hints did. rp_evocity_v33x is compiled from its original VMF (MIT,
+github.com/SuchtBunker/GMod-DarkRP-Maps); no shipped BSP of it was measured.
 
-A full run on rp_downtown_meowy with every pass, hints and the review takes about 8 minutes (it took 11
-before compiles were reused and Viswright's own work was spread over the cores); about nine tenths of it
-is VBSP and VVIS. Each step logs its time and how much of it was compiling. Hint heights compile two at
-a time, which finishes two compiles in 50 seconds rather than 60.
+| Map | Points | Plain: seen / drawn | Shipped: seen / drawn | Viswright: seen / drawn |
+| --- | ---: | ---: | ---: | ---: |
+| rp_downtown_v4c_v2 | 4,232 | 7,846 / 34,525 | -0.1% / -0.2% | -4.4% / -23.9% |
+| rp_downtown_tits_v2 | 12,218 | 5,636 / 49,288 | -34.3% / -3.8% | -1.3% / -12.8% |
+| rp_rockford_v2b | 67,359 | 11,525 / 239,054 | -39.0% / -1.6% | -7.0% / -0.5% |
+| rp_evocity_v33x | 27,942 | 4,483 / 137,260 | - | -3.5% / -7.3% |
 
-In Garry's Mod, the optimised prominence loads with all 191 portal numbers in use. At a storefront door
-given a portal, wireframe rendering shows nothing behind the shut door and the whole plaza once it opens.
+- **Seen.** rockford_v2b's and tits_v2's own hints cut what is seen by 34 to 39%. Viswright's hint search
+  finds 1 to 7% on these maps. Their streets are walled in up to the sky, so a hint over open ground has
+  little to cut off.
+- **Drawn.** Viswright cuts what is drawn by 13 to 24% on the two downtown maps and 7% on evocity, with
+  the areaportals it adds in doorways and windows. The authors' own hints barely change what is drawn,
+  0 to 4%. On rockford_v2b Viswright adds 81 areaportals, but they save under 1%.
 
-The optimised prominence was compiled in full and loaded in Garry's Mod. From open space around each of the 246
-nodraw faces, 18,048 rays were traced at it; every one hit the brush covering it first. The other faces had no
-open space in front of them at all.
+### Compile time
+
+VVIS time for each version; Viswright's own run is the search, done once. Once its items are decided,
+later compiles are pinned and cost one VBSP run more than compiling without Viswright.
+
+| Map | Stripped VVIS | Valve VVIS | Viswright VVIS | Viswright's own run |
+| --- | ---: | ---: | ---: | ---: |
+| ctf_2fort | 5.9 s (5.9-6.7) | 12.0 s (11.6-12.1) | 16.6 s (15.3-16.7) | 18 min |
+| cp_dustbowl | 9.7 s (8.9-9.7) | 22.1 s (20.4-22.3) | 17.0 s (16.9-18.7) | 21 min |
+| cp_badlands | 5.9 s (5.8-6.1) | 18.9 s (18.8-19.8) | 17.8 s (16.0-18.6) | 19 min |
+| cp_granary | 5.0 s | 13.9 s (13.0-13.9) | 34.3 s (33.6-34.8) | 21 min |
+| cp_gravelpit | 2.4 s (2.3-2.5) | 9.4 s (9.1-9.6) | 5.5 s (5.4-5.6) | 18 min |
+| tc_hydro | 4.3 s (4.1-4.4) | 7.4 s (7.0-7.9) | 16.6 s (16.5-16.9) | 19 min |
+| pl_badwater | 11.7 s (11.4-12.4) | 18.0 s (16.9-18.8) | 52.8 s (42.2-56.7) | 21 min |
+| pl_goldrush | 9.6 s (9.5-9.8) | 12.4 s (12.2-12.4) | 21.6 s (21.4-22.0) | 19 min |
+| arena_lumberyard | 7.0 s (6.8-7.0) | 9.5 s (9.5-9.7) | 23.8 s (23.8-24.1) | 17 min |
+| arena_ravine | 0.5 s | 2.2 s (2.1-2.3) | 1.1 s | 2 min |
+
+| Map | Plain VVIS | Viswright VVIS | Viswright's own run |
+| --- | ---: | ---: | ---: |
+| rp_downtown_v4c_v2 | 80.0 s (76.3-104.8) | 116.6 s (115.0-120.9) | 33 min |
+| rp_downtown_tits_v2 | 35.4 s (34.7-51.5) | 50.8 s (47.4-50.9) | 31 min |
+| rp_rockford_v2b | 57.6 s (56.6-57.6) | 85.7 s (85.4-86.1) | 37 min |
+| rp_evocity_v33x | 112.1 s (111.4-112.1) | 198.3 s (197.5-198.7) | 43 min |
+
+### Frame rate
+
+Measured in Garry's Mod at 1600x900 on an RTX 3070 Ti Laptop, with TF2 mounted for the TF2 maps. The
+view walks a fixed path over the map's standing points for about 90 seconds; the path is the same for
+every version of a map. Each figure is the average frames per second and the 1% low, as the median of
+three runs. The compiled versions have no built cubemaps; the shipped ones do.
+
+| Map | Stripped: avg / 1% low | Valve: avg / 1% low | Viswright: avg / 1% low |
+| --- | ---: | ---: | ---: |
+| ctf_2fort | - | - | - |
+| cp_dustbowl | - | - | - |
+| cp_badlands | - | - | - |
+| cp_granary | - | - | - |
+| cp_gravelpit | - | - | - |
+| tc_hydro | 296 / 128 | - | - |
+| pl_badwater | - | - | - |
+| pl_goldrush | - | - | - |
+| arena_lumberyard | - | - | - |
+| arena_ravine | - | - | - |
+
+| Map | Plain: avg / 1% low | Shipped: avg / 1% low | Viswright: avg / 1% low |
+| --- | ---: | ---: | ---: |
+| rp_downtown_v4c_v2 | - | - | - |
+| rp_downtown_tits_v2 | - | - | - |
+| rp_rockford_v2b | - | - | - |
+| rp_evocity_v33x | - | - | - |
 
 ## Reviewing what it did
 
@@ -226,9 +265,7 @@ areaportals and occluders.
 
 For a doorway refused because its two rooms meet another way, the review shows *where*: the openings
 between leaves that join the rooms when every other portal is shut, drawn in red, and the reason names
-the kind. On rp_downtown_meowy, 109 of 228 framed doorways are refused this way: 50 through an opening
-beside the door in the same wall (a shop window, mostly), 13 through one above it, 32 through another
-doorway or gap close by, and 14 a long way round through other rooms.
+the kind.
 
 **PVS slack.** The review also measures how much of what each place's PVS lets through cannot actually be
 seen from there. From every standing point, rays are cast in 65,536 directions against the world's
@@ -239,13 +276,6 @@ Slack is split in two: what other points in the same cluster see (what cutting c
 and what no point in the cluster sees (VVIS being cautious through portals, which no split inside the
 cluster removes). It is a measurement only, shown as a plan per floor and a heatmap layer; no change is
 decided by it.
-
-On the downtown maps a standing point really sees about 1,180 of the 6,940 triangles its PVS lets through
-(80% slack): 24% within clusters, 56% through portals. Open plazas are near 0%, streets and rooms 80-90%.
-Against the hint search's results, the half of the squares with the most slack held 17 of meowy's 21 and
-10 of prominence's 14 squares that a hint helped - a weak guide, and the slack within clusters pointed
-the wrong way. Hints that helped did so by giving VVIS better portals, not by separating places that see
-different things.
 
 ## What Valve's own maps teach
 
@@ -274,16 +304,13 @@ this repository.
   ground (2Fort's courtyard, all of Badlands, Gravelpit's pit), vertical walls cutting open terrain into
   cells, and boxes wrapping rooms, buildings and bridges. Across 621 squares of ground, the squares Valve
   hinted are picked out by slack through portals (AUC 0.64), not by slack within clusters (0.39) or by
-  how much the PVS lets through (0.50) - the same as on the downtown maps.
+  how much the PVS lets through (0.50).
 - **Visclusters trade visibility for compile time** on open maps: Lumberyard sees 32% more with them, for a
   VVIS three times faster.
 - **Detail buys compile time**: made structural, 2Fort's detail would see 8% less, with VVIS 18 times slower
   (198 s); Lumberyard's would take VVIS 854 s.
 - **Areaportals** in these maps are opened and closed by logic and doors' outputs rather than by being
   named as a door's areaportal, so what shutting them hides is not measured here.
-
-The downtown maps differ from these where it matters: their streets are walled in up to the sky, so a
-cap over open ground has nothing to cut off, which is why the hint search finds so little there.
 
 ## Hints the way Valve places them
 
@@ -292,21 +319,14 @@ building's corner, the mouth of a passage - straight across the open space besid
 that plane among its candidates, as the wall's end face; a hint makes it split there. **Hints over open
 ground** now tries those too, after the roof caps: every end of a world wall (a vertical face up to 64
 units wide) is carried along its own plane across the open space beside it until it meets solid again.
-They are measured in batches whose surrounding standing points do not overlap, two batches compiling at
-a time; one is kept if the points within 512 units of it see 2% less, and the set is kept if the whole map
+They are measured in batches whose surrounding standing points do not overlap, several batches compiling
+at a time; one is kept if the points within 512 units of it see 2% less, and the set is kept if the whole map
 sees 1% less and VVIS takes at most two and a half times as long (or 30 seconds more). Over budget, the
 weakest half goes and the rest is compiled again. Both kinds of hint are now judged on VVIS time rather
-than on a portal count.
+than on a portal count. If VVIS fails on the chosen set - VVIS++ can, on a set whose hints each compiled
+alone - the hint at fault is found by halving and left out, rather than the set being lost.
 
-Tested on Valve's maps with their hints taken out, then on the downtown maps:
-
-| Map | Valve's hints | Viswright's: caps | + wall ends | Total | VVIS |
-| --- | --- | --- | --- | --- | --- |
-| ctf_2fort | 16.3% less visible | 11.5% | 4.8% | 15.8% (97% of Valve's) | 5 s -> 13 s (Valve's: 10.9 s) |
-| cp_gravelpit | 19.2% | 9.3% | 3.5% | 12.4% (65%) | 3 s -> 21 s (Valve's: 7.5 s) |
-| rp_downtown_meowy | - | undone (0.9%) | 13.2% (433 kept) | 13.2% | 14 s -> 37 s |
-
-On meowy the search measured 60 of 240 batches of wall ends in its 20 minutes; more time finds more.
+How much they find on fourteen well-known maps is in [Results](#results).
 
 ## Deciding, then compiling the same way every time
 
@@ -333,9 +353,6 @@ it is never forced in. The same map and the same decisions give the same copy ev
 pinned compile costs one VBSP run on top of compiling without Viswright (the first compile of the map
 as it is is kept from the review while the map is unchanged). Items a later review no longer finds,
 because the map changed around them, are marked stale and left out until reviewed again.
-
-On rp_downtown_meowy with every pass: the review took about 7 minutes and left 251 items waiting; with
-them accepted, each pinned compile takes about 20 seconds and gives a byte-identical copy every time.
 
 Each pinned compile also writes `<map>_adopt.vmf` beside the copy: your map with the accepted changes
 in a **Viswright accepted** visgroup, to open in Hammer and save over your map if you want them to be
