@@ -14,7 +14,7 @@ namespace Viswright
 
         /// <summary>
         /// The wall-end hints, measured: candidates go in batches whose surrounding standing points do not
-        /// overlap, so each one's effect is told apart, two batches compiling at a time; a candidate whose
+        /// overlap, so each one's effect is told apart, several batches compiling at a time; a candidate whose
         /// points see <see cref="HintGain"/> less is a winner. The winners are then compiled together, any
         /// that stopped helping are dropped, and the set is kept only if the whole map sees
         /// <see cref="HintMapGain"/> less, with no more than 15% more portals for VVIS and collision unchanged.
@@ -52,6 +52,7 @@ namespace Viswright
             var compiled = new (List<WallHint> Batch, double[]? Cost)[batches.Count];
             TimeSpan slowest = reference.VbspRun is { } rv && reference.VvisRun is { } rvv ? rv.Elapsed + rvv.Elapsed : TimeSpan.FromMinutes(1);
             int started = 0;
+            var trials = tools.ForTrials(HintLanes);
             using (var lanes = new System.Threading.SemaphoreSlim(HintLanes))
             {
                 var running = new List<System.Threading.Tasks.Task>();
@@ -80,7 +81,7 @@ namespace Viswright
                     {
                         try
                         {
-                            if (compile.RunVbsp(tools).Succeeded && !compile.Leaked && compile.RunVvis(tools).Succeeded)
+                            if (compile.RunVbsp(trials).Succeeded && !compile.Leaked && compile.RunVvis(trials).Succeeded)
                             {
                                 // Measured as soon as VVIS ends, so that the batch's folder can go at
                                 // once instead of hundreds of them piling up until the search ends.

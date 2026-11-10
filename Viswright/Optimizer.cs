@@ -628,8 +628,13 @@ namespace Viswright
             ["x"] = square.X, ["y"] = square.Y, ["floor"] = square.Floor, ["ceiling"] = square.Ceiling, ["height"] = height,
         };
 
-        /// <summary>How many hint heights compile at once.</summary>
-        private const int HintLanes = 2;
+        /// <summary>
+        /// How many trial compiles of a hint search run at once, sharing the machine's threads. VBSP++ and
+        /// VVIS++ keep every thread busy on their own, so this buys little - about 15% on ctf_2fort with
+        /// six at three threads each, against one at sixteen - but what VBSP does on one thread is
+        /// overlapped with the others.
+        /// </summary>
+        private static int HintLanes => Math.Clamp(Environment.ProcessorCount / 3, 1, 6);
 
         private static WorkCompile? RunHints(OptimizeOptions options, VmfDocument working, string copy, string folder, string name, Toolchain tools,
             List<BspSpace.BrushShape> collision, SamplePoints samples, ChangeGuard guard, ReviewLog review, WorkCompile reference)
@@ -680,8 +685,9 @@ namespace Viswright
             // A cached baseline has no timings; assume a minute a compile until one has been timed.
             TimeSpan slowest = reference.VbspRun is { } rv && reference.VvisRun is { } rvv ? rv.Elapsed + rvv.Elapsed : TimeSpan.FromMinutes(1);
 
-            // Every height is its own map: written out first, then compiled two at a time, so one
-            // compile's single-threaded VBSP stages run beside the other's VVIS.
+            // Every height is its own map: written out first, then compiled a few at a time, so one
+            // compile's single-threaded VBSP stages run beside the others' VVIS.
+            var trials = tools.ForTrials(HintLanes);
             var rounds = new List<(List<(HintSquare Square, double Height)> Tries, WorkCompile Compile)>();
             for (int round = 0; ; round++)
             {
@@ -717,7 +723,7 @@ namespace Viswright
                         try
                         {
                             var c = rounds[r].Compile;
-                            if (c.RunVbsp(tools).Succeeded && !c.Leaked && c.RunVvis(tools).Succeeded)
+                            if (c.RunVbsp(trials).Succeeded && !c.Leaked && c.RunVvis(trials).Succeeded)
                             {
                                 compiled[r] = CompileMeasure.PerPoint(c, samples);
                                 long took = (c.VbspRun!.Elapsed + c.VvisRun!.Elapsed).Ticks;
