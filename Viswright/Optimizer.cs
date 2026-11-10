@@ -47,6 +47,9 @@ namespace Viswright
         /// <summary>How long the hint search may spend compiling, in minutes.</summary>
         public double HintMinutes { get; init; } = 15;
 
+        /// <summary>How hints are searched for: caps, cuts and boxes chosen by whole-map compiles, or the earlier tiles and wall ends.</summary>
+        public HintSearch HintSearch { get; init; } = HintSearch.Regions;
+
         /// <summary>Folders of Lua to scan for class lookups, on top of the game's own gamemodes and addons.</summary>
         public IReadOnlyList<string> LuaPaths { get; init; } = [];
 
@@ -67,6 +70,16 @@ namespace Viswright
 
         /// <summary>The compilers every pass is checked with. Needed when any pass is on.</summary>
         public Toolchain? Tools { get; init; }
+    }
+
+    /// <summary>How the hint pass searches.</summary>
+    public enum HintSearch
+    {
+        /// <summary>Caps over open-sky regions, cuts across open space and boxes under caps, accepted one at a time by whole-map compiles.</summary>
+        Regions,
+
+        /// <summary>The earlier search: a hint over each 1,024-unit square at a few heights, then the ends of walls, each judged near itself.</summary>
+        Tiles,
     }
 
     /// <summary>What a run did.</summary>
@@ -305,7 +318,16 @@ namespace Viswright
 
             // Hints change only how the map is split, and are judged on what is visible; the passes after
             // them change neither, so the compile detail left is the one to measure against.
-            if (options.Hints)
+            if (options.Hints && options.HintSearch == HintSearch.Regions)
+            {
+                if (RunRegionHints(options, working, copy, Path.Combine(work, "hints"), name, tools, collision, samples, guard, review, lastVis) is { } kept)
+                {
+                    lastVis = latest = kept;
+                    current = CompileMeasure.Of(kept, samples);
+                }
+                Lap("hints");
+            }
+            else if (options.Hints)
             {
                 if (RunHints(options, working, copy, Path.Combine(work, "hints"), name, tools, collision, samples, guard, review, lastVis) is { } kept)
                 {
@@ -634,7 +656,7 @@ namespace Viswright
         /// six at three threads each, against one at sixteen - but what VBSP does on one thread is
         /// overlapped with the others.
         /// </summary>
-        private static int HintLanes => Math.Clamp(Environment.ProcessorCount / 3, 1, 6);
+        private static int HintLanes => Math.Clamp(SourceKitConcurrency.MaxThreads / 3, 1, 6);
 
         private static WorkCompile? RunHints(OptimizeOptions options, VmfDocument working, string copy, string folder, string name, Toolchain tools,
             List<BspSpace.BrushShape> collision, SamplePoints samples, ChangeGuard guard, ReviewLog review, WorkCompile reference)
@@ -1357,7 +1379,9 @@ namespace Viswright
                 var info = new FileInfo(exe);
                 text.Append('|').Append(info.FullName).Append('|').Append(info.Length).Append('|').Append(info.LastWriteTimeUtc.Ticks);
             }
-            text.Append('|').Append(tools.GameFolder).Append('|').Append(tools.VbspFlags).Append('|').Append(tools.VvisFlags);
+            // The thread count changes how fast the compilers run, not what they make.
+            static string Flags(string flags) => System.Text.RegularExpressions.Regex.Replace(flags, @"-threads\s+\d+", "").Trim();
+            text.Append('|').Append(tools.GameFolder).Append('|').Append(Flags(tools.VbspFlags)).Append('|').Append(Flags(tools.VvisFlags));
             text.Append('|').Append(typeof(Optimizer).Assembly.ManifestModule.ModuleVersionId);
             return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())));
         }
