@@ -144,5 +144,32 @@ namespace Viswright.Tests
             // The hint cut the courtyard: more leaves than before.
             Assert.True(BspVisibilityData.Load(hinted.Bsp).Leaves.Count > BspVisibilityData.Load(plain.Bsp).Leaves.Count);
         }
+
+        /// <summary>
+        /// VVIS failing on a set of hints loses only the hints at fault: one that fails on its own, and
+        /// one of a pair that fails together.
+        /// </summary>
+        [Fact]
+        public void AFailingCompileLeavesOutOnlyTheHintsAtFault()
+        {
+            var placed = Enumerable.Range(0, 40).ToHashSet();
+            var ok = WorkCompile.Existing("ok.vmf");
+            int compiles = 0;
+            WorkCompile? Compile()
+            {
+                compiles++;
+                return placed.Contains(7) || (placed.Contains(3) && placed.Contains(30)) ? null : ok;
+            }
+            var dropped = new System.Collections.Generic.List<int>();
+            var result = Optimizer.CompileLeavingOutFailures(placed.ToList(), i => placed.Add(i), i => placed.Remove(i), Compile,
+                i => i.ToString(), dropped, Optimizer.FailureCompiles(placed.Count));
+
+            Assert.Same(ok, result);
+            Assert.Contains(7, dropped);
+            Assert.Single(dropped, d => d is 3 or 30);
+            Assert.Equal(2, dropped.Count);
+            Assert.Equal(38, placed.Count);
+            Assert.True(compiles <= Optimizer.FailureCompiles(40), $"{compiles} compiles");
+        }
     }
 }

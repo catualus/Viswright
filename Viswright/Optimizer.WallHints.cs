@@ -126,6 +126,7 @@ namespace Viswright
             var winners = gains.Where(kv => kv.Value >= HintGain).Select(kv => kv.Key).ToList();
             Log.Info($"hints: {gains.Count} wall end(s) measured, {winners.Count} saw at least {HintGain:P0} less");
 
+            var crashed = new List<WallHint>();
             void Report(IEnumerable<WallHint> kept, IReadOnlyDictionary<WallHint, VmfNode> solids, string? undone)
             {
                 var keptSet = kept.ToHashSet();
@@ -133,6 +134,7 @@ namespace Viswright
                 {
                     bool applied = undone == null && keptSet.Contains(h);
                     string why = applied ? $"carries a wall's end across open space: the points around it see {gain:P1} less"
+                        : crashed.Contains(h) ? "VVIS failed with it alongside the other hints"
                         : undone != null && gain >= HintGain ? $"the set was undone: {undone}"
                         : gain >= HintGain ? "helped alone, but stopped helping alongside the other hints"
                         : $"the points around it saw {gain:P1} less (needs {HintGain:P0})";
@@ -173,7 +175,8 @@ namespace Viswright
             // Halving converges in a handful of rounds; the cap is only a guard.
             for (int round = 1; round <= 16 && placed.Count > 0; round++)
             {
-                final = Compile(working, copy, folder + "-walls", name, tools);
+                final = CompileLeavingOutFailures(placed.Keys.ToList(), Place, Unplace, () => Compile(working, copy, folder + "-walls", name, tools),
+                    h => h.Id, crashed, FailureCompiles(placed.Count));
                 if (final == null)
                     break;
                 var cost = CompileMeasure.PerPoint(final, samples);

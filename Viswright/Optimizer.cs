@@ -659,6 +659,7 @@ namespace Viswright
             var best = new Dictionary<HintSquare, (double Height, double Gain)>();
             var tried = new Dictionary<HintSquare, (double Height, double Gain)>();
             var lostTogether = new HashSet<HintSquare>();
+            var crashed = new List<HintSquare>();
             void Report(string? undone)
             {
                 foreach (var square in squares)
@@ -675,7 +676,8 @@ namespace Viswright
                         continue;
                     }
                     var (height, gain) = best.TryGetValue(square, out var b) ? b : t;
-                    string why = undone != null && best.ContainsKey(square) ? $"the set was undone: {undone}"
+                    string why = crashed.Contains(square) ? "VVIS failed with it alongside the other hints"
+                        : undone != null && best.ContainsKey(square) ? $"the set was undone: {undone}"
                         : lostTogether.Contains(square) ? $"saw {gain:P1} less alone, but stopped helping alongside the other hints"
                         : $"its points saw at most {gain:P1} less with a hint (needs {HintGain:P0})";
                     review.Add(new ReviewItem(id, "hints", ItemStatus.Rejected, why, lo,
@@ -781,7 +783,8 @@ namespace Viswright
             WorkCompile? final = null;
             for (int round = 1; round <= 3 && pass.Placed.Count > 0; round++)
             {
-                final = Compile(working, copy, folder, name, tools);
+                final = CompileLeavingOutFailures(pass.Placed.Keys.ToList(), s => pass.Place(s, best[s].Height), pass.Remove,
+                    () => Compile(working, copy, folder, name, tools), s => $"the hint over {s.Mins.X:0} {s.Mins.Y:0}", crashed, FailureCompiles(pass.Placed.Count));
                 if (final == null)
                     break;
                 var cost = CompileMeasure.PerPoint(final, samples);
@@ -837,6 +840,65 @@ namespace Viswright
                 return null;
             return compile;
         }
+
+        /// <summary>
+        /// A VBSP and VVIS compile of the map with as many of <paramref name="placed"/> in it as compile
+        /// cleanly, or null. VVIS can crash on a set of hints each of which compiled alone; rather than
+        /// lose the set, one at fault is found by halving and left out, and the rest compiled again.
+        /// The halving keeps a part of the set known to compile (at first none of it, the map the
+        /// search started from) and the suspects that make it fail; with the first half of the suspects
+        /// added, either it fails, and the fault is in that half, or it compiles, and the half joins
+        /// the known part. That holds however many faults the set has. What was left out goes in
+        /// <paramref name="dropped"/>. Gives up after <paramref name="most"/> compiles.
+        /// </summary>
+        internal static WorkCompile? CompileLeavingOutFailures<T>(List<T> placed, Action<T> place, Action<T> unplace, Func<WorkCompile?> compile,
+            Func<T, string> describe, List<T> dropped, int most) where T : notnull
+        {
+            int used = 0;
+            while (placed.Count > 0)
+            {
+                var result = compile();
+                if (result != null || ++used >= most)
+                    return result;
+                // Suspects ruled out of the search stay out until it ends: they are known neither way.
+                var suspects = placed.ToList();
+                var aside = new List<T>();
+                while (suspects.Count > 1)
+                {
+                    var rest = suspects.Skip(suspects.Count / 2).ToList();
+                    foreach (var item in rest)
+                        unplace(item);
+                    bool compiles = compile() != null;
+                    if (compiles)
+                    {
+                        foreach (var item in rest)
+                            place(item);
+                        suspects = rest;
+                    }
+                    else
+                    {
+                        aside.AddRange(rest);
+                        suspects = suspects.Take(suspects.Count / 2).ToList();
+                    }
+                    if (++used >= most)
+                    {
+                        foreach (var item in aside)
+                            place(item);
+                        return null;
+                    }
+                }
+                foreach (var item in aside)
+                    place(item);
+                unplace(suspects[0]);
+                placed.Remove(suspects[0]);
+                dropped.Add(suspects[0]);
+                Log.Info($"hints: VVIS failed with the set in; leaving out {describe(suspects[0])} and compiling again");
+            }
+            return null;
+        }
+
+        /// <summary>Compiles the failure search may spend on a set of <paramref name="count"/>: enough to find two or three at fault.</summary>
+        internal static int FailureCompiles(int count) => 3 * ((int)Math.Ceiling(Math.Log2(Math.Max(2, count))) + 1);
 
         /// <summary>How much less a square's points see in <paramref name="cost"/> than in <paramref name="reference"/>.</summary>
         private static double Gain(HintSquare square, double[] reference, double[] cost)
