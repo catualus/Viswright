@@ -14,8 +14,15 @@ Well-known maps only, each with a source anyone can get.
 | rp_rockford_v2b | GMod | large DarkRP city (Workshop 622810630, 699k subscribers) | decompiled with BSPSource 1.4.8 |
 | rp_evocity_v33x | GMod | large DarkRP city | original VMF, MIT, github.com/SuchtBunker/GMod-DarkRP-Maps |
 
-A decompile is not the author's source: VBSP keeps no hint brushes, so a decompile has none, and clip
-brushes come back as nodraw. Results on a decompile are labelled so.
+A decompile is not the author's source: clip brushes come back as nodraw. Hint brushes do survive,
+because VBSP leaves them in the BSP's brush lump, so a decompile keeps its author's hints. Results on a
+decompile are labelled so.
+
+Shipped BSPs are compared by triangles, and that count is only fair between maps compiled the same way.
+The shipped rp_downtown_tits_v2 and rp_rockford_v2b were compiled without T-junction fixing, and the
+maps compiled here were not: fixing T-junctions splits faces into more triangles. Their "seen" gap of
+34 to 39% is those extra triangles, and compiling the source with `-notjunc` reproduces it. Counted by
+faces the gap is 0.1 to 0.3%.
 
 cp_badlands' VMF has its hints, skips, clips and 58 areaportals in Hammer's hidden blocks, which VBSP
 skips; Valve's shipped BSP has all 58 portals, so they are unhidden before compiling. pl_badwater's

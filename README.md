@@ -167,9 +167,9 @@ Percentages are against the first column; lower is better.
 - **Viswright**: the source run through Viswright with every pass on and every item accepted.
 
 Three of the sources are BSPSource 1.4.8 decompiles: rp_downtown_v4c_v2 (Workshop 110286060),
-rp_downtown_tits_v2 (1527403485) and rp_rockford_v2b (622810630). VBSP keeps no hint brushes, so a
-decompile has none. Plain is therefore the map without its author's hints, and Shipped shows what those
-hints did. rp_evocity_v33x is compiled from its original VMF (MIT,
+rp_downtown_tits_v2 (1527403485) and rp_rockford_v2b (622810630). VBSP leaves hint brushes in the
+BSP's brush lump, so the decompiles keep their authors' hints (13, 29 and 149 hint faces): Plain is the
+author's map, hints included. rp_evocity_v33x is compiled from its original VMF (MIT,
 github.com/SuchtBunker/GMod-DarkRP-Maps); no shipped BSP of it was measured.
 
 | Map | Points | Plain: seen / drawn | Shipped: seen / drawn | Viswright: seen / drawn |
@@ -179,12 +179,17 @@ github.com/SuchtBunker/GMod-DarkRP-Maps); no shipped BSP of it was measured.
 | rp_rockford_v2b | 67,359 | 11,525 / 239,054 | -39.0% / -1.6% | -7.0% / -0.5% |
 | rp_evocity_v33x | 27,942 | 4,483 / 137,260 | - | -3.5% / -7.3% |
 
-- **Seen.** rockford_v2b's and tits_v2's own hints cut what is seen by 34 to 39%. Viswright's hint search
-  finds 1 to 7% on these maps. Their streets are walled in up to the sky, so a hint over open ground has
-  little to cut off.
+The Shipped column overstates what the shipped maps save. The shipped rp_downtown_tits_v2 and
+rp_rockford_v2b were compiled without T-junction fixing and Plain was not, and fixing T-junctions splits
+faces into more triangles; compiling the same source with `-notjunc` reproduces the whole gap. Counted
+by faces, Shipped sees 0.1 to 0.3% less than Plain.
+
+- **Seen.** Measured one at a time, the authors' hints are worth 0.2% on tits_v2, 0.4% on v4c_v2 and
+  1.9% on rockford_v2b. Viswright's hint search finds 1 to 7% on these maps. Their streets are walled in
+  up to the sky, so a hint over open ground has little to cut off.
 - **Drawn.** Viswright cuts what is drawn by 13 to 24% on the two downtown maps and 7% on evocity, with
-  the areaportals it adds in doorways and windows. The authors' own hints barely change what is drawn,
-  0 to 4%. On rockford_v2b Viswright adds 81 areaportals, but they save under 1%.
+  the areaportals it adds in doorways and windows. Shipped's 0 to 4% carries the same T-junction
+  difference. On rockford_v2b Viswright adds 81 areaportals, but they save under 1%.
 
 ### Compile time
 
