@@ -17,6 +17,10 @@ namespace Viswright
     /// in every leaf a cluster can see, each face once however many leaves it crosses. That is the
     /// number a pass has to bring down, and the number before and after a change is compared on.
     ///
+    /// Triangles are counted from each face's corners (<see cref="FaceCorners"/>) when the report is
+    /// loaded from a file: the vertices T-junction fixing adds to a face's edge are not triangles of its
+    /// shape, and counting them made the same map differ by a third between compiles.
+    ///
     /// Not counted yet: static props and entities in the visible leaves, and anything areaportals or
     /// occluders cull at run time, which the PVS knows nothing about.
     /// </summary>
@@ -74,8 +78,21 @@ namespace Viswright
             LeafFaces = bsp.LeafFaces.Count;
         }
 
-        public static VisReport Build(BspVisibilityData bsp)
+        /// <summary>The report of the BSP at <paramref name="path"/>, its faces counted by their corners.</summary>
+        public static VisReport Load(string path)
         {
+            var vis = BspVisibilityData.Load(path);
+            return Build(vis, FaceCorners.Load(path, vis));
+        }
+
+        /// <summary>
+        /// The report of <paramref name="bsp"/>, each face costing <paramref name="faceTriangles"/>[face], or
+        /// the triangles its edge lists when that is not given.
+        /// </summary>
+        public static VisReport Build(BspVisibilityData bsp, IReadOnlyList<int>? faceTriangles = null)
+        {
+            int Cost(int face) => faceTriangles != null ? faceTriangles[face] : bsp.Faces[face].Triangles;
+
             if (!bsp.HasVisibility)
                 throw new InvalidOperationException("The BSP has no visibility data: run VVIS before the report.");
 
@@ -99,7 +116,7 @@ namespace Viswright
                 for (int i = 0; i < leaf.LeafFaceCount; i++)
                 {
                     int face = bsp.LeafFaces[leaf.FirstLeafFace + i];
-                    if (seenInCluster[face] == leaf.Cluster || bsp.Faces[face].Triangles == 0)
+                    if (seenInCluster[face] == leaf.Cluster || Cost(face) == 0)
                         continue;
                     seenInCluster[face] = leaf.Cluster;
                     clusterFaces[leaf.Cluster].Add(face);
@@ -113,7 +130,7 @@ namespace Viswright
                     if (!counted[face])
                     {
                         counted[face] = true;
-                        worldTriangles += bsp.Faces[face].Triangles;
+                        worldTriangles += Cost(face);
                     }
 
             var costs = new ClusterCost[clusters];
@@ -133,7 +150,7 @@ namespace Viswright
                             if (stamp[face] == mark)
                                 continue;
                             stamp[face] = mark;
-                            triangles += bsp.Faces[face].Triangles;
+                            triangles += Cost(face);
                         }
                     }
                     var centre = leafCount[c] == 0 ? Vec3.Zero : centreSum[c] / leafCount[c];
