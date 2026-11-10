@@ -96,21 +96,56 @@ converted - often few or none - and the compiled entity list is checked against 
 entity of the map moved, the pass is undone. The log says so as a warning and names the files, and the
 review lists each entity kept for it.
 
-**Hints over open ground** (`-hints`, `-hinttime M`) tries a hint brush across each 1,024-unit square of
-open ground - streets, courtyards, anywhere with 384 units or more of sky above where players stand - at
-heights from 192 to 960 units above the ground, below the sky. Every square is tried at the same step
-above its own ground in one compile, so each height costs one VBSP and one VVIS run; a square keeps the
-height that cut what its own standing points see the most, if by 2% or more. The squares kept are
-compiled together and any that stopped helping lose their hint. The set is kept only if the whole map
-sees at least 1% less, VVIS has no more than 15% more portals to work through, and collision is
-unchanged. A hint is toolshint on top and toolsskip on every other face: not solid, never drawn, unable
-to leak. The search needs VVIS++ and stops when its time (15 minutes by default) runs out.
+**Hints over open ground** (`-hints`, `-hinttime M`) places hints the way Valve's own maps have them:
+few, and large.
+
+- **Caps.** Ground with 384 units or more of sky above where players stand is grouped into regions,
+  split where the ground drops by more than 128 units between neighbouring standing points, so a pit and
+  the ground round its edge are two. Down from the sky beside each region, the first roof, wall top or
+  higher ground met is its rim, and the commonest rim heights (up to three, 96 units apart) are where it
+  is capped, just above the roofs. A cap is one horizontal face at one height over everything
+  open at that height that joins the region - on the map's own grid of 128 units, cut into as few
+  rectangles as cover it, each reaching half a cell into the walls round it - so no part is left out and
+  none sits at another height. On an open map one cap can cover the whole map.
+- **Cuts.** The plane of every vertical world face - a facade, a corner, a wall's end - carried past each
+  end of the face across the open space beside it, traced on a 32-unit grid in the plane, up to the
+  face's top and at most 3,072 units along.
+- **Boxes.** Once a cap is in, each building standing under it - a run of columns whose top is 128 units
+  or more above the ground round it and 48 below the cap - is wrapped in a box of vertical hint faces from
+  the ground to the cap, each side moved onto the facade nearest it.
+
+Before anything is compiled, each candidate is ranked by the PVS at stake where it cuts: the clusters
+its faces pass through the inside of (probed every 64 units), each weighted by the triangles visible from
+every standing point in it, as a share of what all the standing points see. On Valve's TF2 maps that
+picked out where Valve hinted with an AUC of 0.82 to 0.85. Then the search goes in rounds, each
+compiling candidates alone on top of the hints accepted so far and measuring the whole map: the eight
+ranked highest in the first round (caps over the same ground at three heights at most, other kinds two
+to a family, and a box always, while one waits), four each round after, and then any measured in an
+earlier round whose gain then could still beat the round's best - hints stand in for each other, so a
+gain only shrinks as others go in. The round's best goes in if the whole map sees at least 0.3% less;
+otherwise the search stops. Several compile at a time, sharing the machine's threads (or the `-threads`
+given).
+
+The hints accepted are compiled together with the tools as they are, and kept only if the whole map
+sees at least 1% less, VVIS takes at most two and a half times as long (or 30 seconds more; over it, the
+last accepted go first), the map stays clear of the face limits, and collision is unchanged. If VVIS
+fails on the set - VVIS++ can, on a set whose hints each compiled alone - the hint at fault is found by
+halving and left out. A hint is toolshint on the faces that split and toolsskip on every other face: not
+solid, never drawn, unable to leak. The search needs VVIS++ and stops when its time (15 minutes by
+default) runs out. `-hintsearch tiles` uses the earlier search instead, described in
+[Hints the way Valve places them](#hints-the-way-valve-places-them), for comparison.
 
 "More visible" is measured at the points a player can stand: positions at eye height above solid
 ground on a 128-unit grid, found once from the first compile, in open space joined to a spawn point or
 a teleport destination. A sealed room nobody can reach, such as a box built above a city, is left
 out. Two compiles do not share clusters, but they share these points, so the triangles
 visible from each can be compared directly.
+
+Triangles are counted from each face's corners: a face with n corners is n - 2 triangles. A compiled
+face also lists a vertex wherever a neighbouring face has a corner on its edge - T-junction fixing puts
+them there - and counting those made maps compiled with and without `-notjunc` differ by a third, and
+made a hint that splits a face cost its neighbours triangles. Since 10 November 2026 neither counts;
+figures measured before then, in [Results](#results), counted every vertex.
 
 Checking compiles use VBSP's default block size unless `-blocksize N` gives the one the real compile
 uses. It matters: on a city map a block size of 4,096 can give a fifth fewer clusters than 1,024, and a
@@ -159,6 +194,40 @@ Percentages are against the first column; lower is better.
 - **Drawn.** Viswright is ahead on three maps, level on two and behind on five. The gap is areaportals.
   Valve's designers place 1 to 134 a map, many opened by map logic. Viswright places 2 to 26, and only
   where a door or opening provably divides two areas.
+
+### Hints against Valve's
+
+Measured on 10 November 2026, after the hint search was rebuilt: hints alone, against Valve's own, on
+the four TF2 maps an 8 November study compared them on. Every version is Stripped with nothing but
+hints added, compiled with vbsp++ (`-cullverts`) and vvis++, and measured at the table above's standing
+points, with triangles counted by their corners.
+
+- **Valve**: Valve's hint brushes put back into Stripped.
+- **Tiles**: the hints the 2 and 3 November run placed with the earlier search (now `-hintsearch tiles`),
+  put into Stripped.
+- **Regions**: `-hints` alone on Stripped, with the search described in [The passes](#the-passes).
+
+Figures are how much less a standing point sees than in Stripped; higher is better. Runs are the VBSP and
+VVIS runs the search made, the final ones included.
+
+| Map | Valve | Tiles: less seen / runs | Regions: less seen / runs |
+| --- | ---: | ---: | ---: |
+| ctf_2fort | 15.5% | 17.4% / 262 | 19.9% / 132 |
+| cp_gravelpit | 19.1% | 11.5% / 270 | 20.1% / 90 |
+| arena_ravine | 8.3% | 5.6% / 88 | 9.4% / 102 |
+| cp_badlands | 23.9% | 18.6% / 96 | 25.8% / 202 |
+
+- **Regions is ahead of Valve on all four maps**, by 1.0 to 4.5 points, and of Tiles by 2.5 to 8.6.
+  Counted by face area instead of triangles it is ahead of Valve on all four too, by 1.5 to 4.9 points.
+- **Where it comes from.** One cap does most of it: z 144 over all of Gravelpit (17.7% alone, against
+  Valve's z 160), z 480 over Badlands (13.5%), z 656 over 2Fort (10.7%), z 352 over Ravine (3.8%). Then
+  more caps at other roof lines, the boxes under a cap (3.3% on Badlands, all ten together), and long
+  cuts across the open ground, 0.4 to 1.9% each. Each map kept 6 to 11 hints.
+- **Runs.** Tiles ran out of its 15 minutes on three of the maps with wall ends still to measure (on
+  Badlands, 39 of 141 batches), so its runs are what fitted in the time. Regions was given 60 minutes and 8
+  of the machine's 16 threads, shared with other work; it stopped on its 0.3% rule on 2Fort, Gravelpit and
+  Ravine, and ran out of time on Badlands after 15 rounds, then left out the last four it had accepted to
+  keep VVIS within its allowance. Viswright's own results in the tables above are still the earlier search.
 
 ### Garry's Mod
 
@@ -319,19 +388,20 @@ this repository.
 
 ## Hints the way Valve places them
 
-Drawn close up in 3D, most of Valve's vertical hints carry the end of a wall - a doorway's jamb, a
-building's corner, the mouth of a passage - straight across the open space beside it. VBSP already has
-that plane among its candidates, as the wall's end face; a hint makes it split there. **Hints over open
-ground** now tries those too, after the roof caps: every end of a world wall (a vertical face up to 64
-units wide) is carried along its own plane across the open space beside it until it meets solid again.
-They are measured in batches whose surrounding standing points do not overlap, several batches compiling
-at a time; one is kept if the points within 512 units of it see 2% less, and the set is kept if the whole map
-sees 1% less and VVIS takes at most two and a half times as long (or 30 seconds more). Over budget, the
-weakest half goes and the rest is compiled again. Both kinds of hint are now judged on VVIS time rather
-than on a portal count. If VVIS fails on the chosen set - VVIS++ can, on a set whose hints each compiled
-alone - the hint at fault is found by halving and left out, rather than the set being lost.
+Drawn close up in 3D, Valve's hints make three shapes: one cap at roof height over each open area,
+vertical faces carrying a wall's end, a building's corner or a facade across the open space beside it,
+and boxes round buildings and bridges under a cap. The search above builds those three.
 
-How much they find on fourteen well-known maps is in [Results](#results).
+Until 10 November 2026 it worked differently, and `-hintsearch tiles` still does. It tried a hint across
+each 1,024-unit square of open ground at heights from 192 to 960 units above that square's own ground,
+every square at the same step in one compile, and each square kept the height that cut what its own
+standing points saw the most, if by 2%. Then every end of a world wall (a vertical face up to 64 units
+wide) was carried across the open space beside it and measured in batches whose surrounding standing
+points did not overlap, one kept if the points within 512 units of it saw 2% less. Measured against
+Valve's hints on four TF2 maps (in [Results](#results)), that fell short in two ways. The tiles left holes
+and sat at different heights where Valve has one face: over Gravelpit's pit, one face over the same
+squares cut 18.9% where the tiles cut 11.8%. And each hint was judged where it stands, but 60 to 94% of
+a good hint's gain lands more than 512 units away from it, so the credit went to the wrong candidates.
 
 ## Deciding, then compiling the same way every time
 
@@ -410,7 +480,8 @@ compile that would go over.
 ```
 viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N] [-areaportals [-windowpictures]]
                    [-detail] [-nodraw] [-fades [-fadepixels N]] [-slim [-luapath <folder>]...]
-                   [-hints [-hinttime M]] [-blocksize N] [-review] [-mode auto|review|pinned] [-accept]
+                   [-hints [-hinttime M] [-hintsearch regions|tiles]] [-blocksize N] [-review]
+                   [-mode auto|review|pinned] [-accept]
                    [-cpu] -vbsp <exe> -vvis <exe> -game <folder>
 viswright audit <map.vmf>
 viswright report <map.bsp>

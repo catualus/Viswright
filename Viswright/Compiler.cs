@@ -22,11 +22,13 @@ namespace Viswright
         public Toolchain ForTrials(int lanes)
         {
             static bool PlusPlus(string exe) => Path.GetFileName(exe).Contains("++", StringComparison.Ordinal);
-            string threads = $" -threads {Math.Max(1, Environment.ProcessorCount / lanes)}";
+            // The run's own thread count, if it was given one, is shared out rather than added to.
+            static string Without(string flags) => System.Text.RegularExpressions.Regex.Replace(flags, @"-threads\s+\d+", "").Trim();
+            string threads = $" -threads {Math.Max(1, SourceKitConcurrency.MaxThreads / lanes)}";
             return this with
             {
-                VbspFlags = (VbspFlags + (PlusPlus(Vbsp) ? threads + " -nophysics -nodefaultcubemap" : "")).Trim(),
-                VvisFlags = (VvisFlags + (PlusPlus(Vvis) ? threads : "")).Trim(),
+                VbspFlags = (Without(VbspFlags) + (PlusPlus(Vbsp) ? threads + " -nophysics -nodefaultcubemap" : "")).Trim(),
+                VvisFlags = (Without(VvisFlags) + (PlusPlus(Vvis) ? threads : "")).Trim(),
             };
         }
 

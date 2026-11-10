@@ -112,7 +112,8 @@ namespace Viswright.Bench
             var samples = SamplePoints.From(points);
 
             var vis = BspVisibilityData.Load(bsp);
-            var report = VisReport.Build(vis);
+            // Faces counted by their corners, so maps compiled with and without T-junction fixing compare.
+            var report = VisReport.Build(vis, FaceCorners.Load(bsp, vis));
             var space = BspSpace.Load(bsp);
             string prt = Path.ChangeExtension(bsp, "prt");
             int portals = File.Exists(prt) ? PortalFile.Load(prt).Portals.Count : -1;

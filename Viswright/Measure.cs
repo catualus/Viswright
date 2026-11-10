@@ -190,8 +190,7 @@ namespace Viswright
     {
         public static CompileMeasure Of(WorkCompile compile, SamplePoints samples)
         {
-            var vis = BspVisibilityData.Load(compile.Bsp);
-            var report = VisReport.Build(vis);
+            var report = VisReport.Load(compile.Bsp);
             var space = BspSpace.Load(compile.Bsp);
             int portals = File.Exists(compile.Prt) ? PortalFile.Load(compile.Prt).Portals.Count : 0;
 
@@ -205,9 +204,9 @@ namespace Viswright
 
         /// <summary>Triangles visible from each sample point in this compile, or -1 where a point is not in open space.</summary>
         public static double[] PerPoint(WorkCompile compile, SamplePoints samples) =>
-            PerPoint(BspSpace.Load(compile.Bsp), VisReport.Build(BspVisibilityData.Load(compile.Bsp)), samples);
+            PerPoint(BspSpace.Load(compile.Bsp), VisReport.Load(compile.Bsp), samples);
 
-        private static double[] PerPoint(BspSpace space, VisReport report, SamplePoints samples) =>
+        internal static double[] PerPoint(BspSpace space, VisReport report, SamplePoints samples) =>
             samples.Points.Select(point => space.ClusterAt(point) is var c && c >= 0 && c < report.Costs.Count
                 ? (double)report.Costs[c].Triangles : -1).ToArray();
 

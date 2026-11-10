@@ -60,7 +60,9 @@ Machine: AMD Ryzen 7 6800H (8 cores, 16 threads), 32 GB, RTX 3070 Ti Laptop, Win
    Stripped) compile, and the same points are used for every variant, so variants are compared at
    the same places. Each table gives the point count.
 2. **PVS triangles.** For each point, the world triangles in the leaves VVIS marks visible from the
-   point's cluster. Reported as the mean over all points, with the 90th percentile.
+   point's cluster. Reported as the mean over all points, with the 90th percentile. Since 10 November
+   2026 a face counts the triangles of its shape, from its corners; before, it counted one for every
+   vertex on its edge past two, and T-junction fixing adds those (see Shipped BSPs above).
 3. **Drawn triangles.** The same, plus static-prop triangles in those leaves, with areaportals
    honoured: the engine's area flood through open portals, narrowed to each portal's outline, doors
    shut, windows shut past their fade distance. A prop counts with its full-detail model (`.dx90.vtx`,

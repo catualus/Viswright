@@ -56,8 +56,19 @@
   {
     "Name": "Hints over open ground",
     "Parameter": " -hints",
-    "Description": "Try hint brushes across open streets and courtyards at a few heights above the ground, and keep one only where it lowers what players standing there can see. Each height costs a VBSP and VVIS compile, so this needs VVIS++ and stops searching when Hint search minutes run out. Hints are never solid or drawn and cannot leak; the set is undone unless the whole map sees less.",
-    "Warning": "Adds several compiles to every run - about a minute each on a large map - until the search time runs out."
+    "Description": "Place hint brushes the way Valve's maps have them: one cap over each open-sky area at the height of the roofs around it, vertical cuts carrying walls and facades across open space, and boxes round the buildings under a cap. The candidates are ranked by how much players standing where they cut can see, the best few compiled each round, and the one that cuts what the whole map sees the most is kept, until none cuts it by 0.3%. Needs VVIS++, and stops searching when Hint search minutes run out. Hints are never solid or drawn and cannot leak; the set is undone unless the whole map sees less.",
+    "Warning": "Adds a few dozen compiles to every run - about a minute each on a large map - until the search ends or its time runs out."
+  },
+  {
+    "Name": "Hint search",
+    "Parameter": " -hintsearch",
+    "CanHaveValue": true,
+    "Value": "regions",
+    "Options": [
+      "regions",
+      "tiles"
+    ],
+    "Description": "How Hints over open ground searches. regions: caps, cuts and boxes, each accepted by what the whole map sees. tiles: the earlier search, a hint over each 1,024-unit square at a few heights and then the ends of walls, each judged by the standing points near it; kept for comparison."
   },
   {
     "Name": "Hint search minutes",

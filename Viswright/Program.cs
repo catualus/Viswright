@@ -67,7 +67,7 @@ namespace Viswright
         private static int Optimize(string[] args)
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-windowpictures", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-blocksize", "-review", "-cpu", "-mode", "-accept", "-vbsp", "-vvis", "-game" };
+                { "-source", "-threads", "-dryrun", "-detail", "-nodraw", "-areaportals", "-windowpictures", "-fades", "-fadepixels", "-slim", "-luapath", "-hints", "-hinttime", "-hintsearch", "-blocksize", "-review", "-cpu", "-mode", "-accept", "-vbsp", "-vvis", "-game" };
             RefuseUnknownFlags(args, known);
 
             string input = Positional(args, 1) ?? throw new ArgumentException("optimize needs the VMF to read.");
@@ -82,7 +82,9 @@ namespace Viswright
                     ? (int.TryParse(block, NumberStyles.Integer, CultureInfo.InvariantCulture, out int b) && b >= 0
                         ? $"-blocksize {b}" : throw new ArgumentException($"-blocksize needs a whole number of units, not '{block}'."))
                     : "";
-                tools = new Toolchain(vbsp!, vvis!, game!, vbspFlags);
+                // A thread count given to Viswright holds for the compilers it runs, too.
+                string threadFlag = TryGetFlagValue(args, "-threads", out string? threadCount) ? $"-threads {threadCount}" : "";
+                tools = new Toolchain(vbsp!, vvis!, game!, $"{vbspFlags} {threadFlag}".Trim(), threadFlag);
             }
 
             var result = Optimizer.Run(new OptimizeOptions
@@ -118,6 +120,14 @@ namespace Viswright
                     ? (double.TryParse(minutes, NumberStyles.Float, CultureInfo.InvariantCulture, out double m) && m > 0 && m <= 240 ? m
                         : throw new ArgumentException($"-hinttime needs a number of minutes from 1 to 240, not '{minutes}'."))
                     : 15,
+                HintSearch = TryGetFlagValue(args, "-hintsearch", out string? search)
+                    ? search!.ToLowerInvariant() switch
+                    {
+                        "regions" => HintSearch.Regions,
+                        "tiles" => HintSearch.Tiles,
+                        _ => throw new ArgumentException($"-hintsearch is regions or tiles, not '{search}'."),
+                    }
+                    : HintSearch.Regions,
                 Tools = tools,
             });
 
@@ -150,7 +160,7 @@ namespace Viswright
                 throw new FileNotFoundException($"The BSP {bsp} does not exist. Run VBSP and VVIS first.", bsp);
 
             Log.Vmf(Path.GetFileName(bsp));
-            var report = VisReport.Build(BspVisibilityData.Load(bsp));
+            var report = VisReport.Load(bsp);
             foreach (string line in report.Lines())
                 Log.Check(line);
 
@@ -400,7 +410,8 @@ namespace Viswright
 
                   viswright optimize <map.vmf> [-source <queued.vmf>] [-dryrun] [-threads N]
                                      [-areaportals [-windowpictures]] [-detail] [-nodraw] [-fades [-fadepixels N]]
-                                     [-slim [-luapath <folder>]...] [-hints [-hinttime M]] [-blocksize N] [-mode auto|review|pinned] [-accept]
+                                     [-slim [-luapath <folder>]...] [-hints [-hinttime M] [-hintsearch regions|tiles]] [-blocksize N]
+                                     [-mode auto|review|pinned] [-accept]
                                      -vbsp <exe> -vvis <exe> -game <folder>
                       Optimise a copy of the map and hand it to the rest of the compile. The map
                       itself is never written. -source names the map as queued when <map.vmf> is an
@@ -412,8 +423,12 @@ namespace Viswright
                       static props and func_detail, unless Lua looks their class up; when Lua
                       uses MapCreationID, only those that no map entity comes after, so map
                       entity IDs stay stable.
-                      -hints tries hints over open ground at a few heights and keeps each only
-                      where it lowers what is visible, searching for at most M minutes (15).
+                      -hints puts caps over open ground at its roof heights, cuts carrying walls
+                      across open space, and boxes round buildings under a cap, accepting one at a
+                      time by what the whole map sees, searching for at most M minutes (15).
+                      -hintsearch tiles uses the earlier search instead: a hint over each 1,024-unit
+                      square at a few heights, then the ends of walls, each judged near itself.
+                      -threads N also limits the compilers Viswright runs.
                       With no -mode, a map's first run is a review: everything is searched and
                       measured, a review and <map>.viswright.json are written beside it, and the
                       compile uses the map as it is. Once every item is accepted or denied - in
@@ -483,7 +498,7 @@ namespace Viswright
         }
 
         private static readonly HashSet<string> ValueFlags = new(StringComparer.OrdinalIgnoreCase)
-            { "-source", "-threads", "-vbsp", "-vvis", "-game", "-fadepixels", "-luapath", "-hinttime", "-blocksize", "-vmf", "-out", "-from", "-mode" };
+            { "-source", "-threads", "-vbsp", "-vvis", "-game", "-fadepixels", "-luapath", "-hinttime", "-hintsearch", "-blocksize", "-vmf", "-out", "-from", "-mode" };
 
         private static List<string> AllFlagValues(string[] args, string flag)
         {

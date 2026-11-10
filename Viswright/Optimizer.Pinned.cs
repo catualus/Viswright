@@ -123,20 +123,34 @@ namespace Viswright
                 detailPass.Apply(picked);
             }
 
-            // Hints: a slab over each decided square at the decided height.
+            // Hints: the brushes of each decided cap, cut or box; a slab over each decided square at the
+            // decided height; a wall's end carried across. Caps, cuts and boxes go in in the order the search
+            // accepted them: VBSP's tree, and so what is visible, depends on the order of the brushes.
             HintPass? hintPass = null;
             var wallSolids = new List<VmfNode>();
+            int hintItems = 0;
             if (options.Hints)
             {
                 hintPass = new HintPass(working);
-                foreach (var item in accepted.Where(i => i.Pass == "hints"))
+                foreach (var item in accepted.Where(i => i.Pass == "hints").OrderBy(i => i.Data.GetValueOrDefault("round")))
                 {
                     var d = item.Data;
+                    if (d.ContainsKey("shape"))
+                    {
+                        foreach (var solid in HintCandidate.FromData(d).Brushes(working.MaxId()))
+                        {
+                            working.World.Add(solid);
+                            wallSolids.Add(solid);
+                        }
+                        hintItems++;
+                        continue;
+                    }
                     if (d.ContainsKey("wallAxis"))
                     {
                         var solid = WallHints.Brush(WallHint.FromData(d), working.MaxId());
                         working.World.Add(solid);
                         wallSolids.Add(solid);
+                        hintItems++;
                         continue;
                     }
                     if (!d.ContainsKey("x") || !d.ContainsKey("height"))
@@ -308,7 +322,7 @@ namespace Viswright
 
             var wallPaths = wallSolids.Select(s => $"world#{working.World.Id}/solid#{s.Id}").ToHashSet();
             guard.Allow("hints", change => change.Kind == VmfChangeKind.Added && wallPaths.Contains(change.Path));
-            int portals = (portalPass?.Added.Count ?? 0) + (portalPass?.AddedWindows.Count ?? 0), detailed = detailPass?.Moved.Count ?? 0, hints = (hintPass?.Placed.Count ?? 0) + wallSolids.Count;
+            int portals = (portalPass?.Added.Count ?? 0) + (portalPass?.AddedWindows.Count ?? 0), detailed = detailPass?.Moved.Count ?? 0, hints = (hintPass?.Placed.Count ?? 0) + hintItems;
             int nodrawn = nodrawPass?.Changed.Count ?? 0, faded = fadePass?.Changed.Count ?? 0, slimmed = slimPass?.Converted.Count ?? 0;
             Log.Check($"pinned: applied {portals} areaportal(s), {detailed} detail brush(es), {hints} hint(s), {nodrawn} nodraw face(s), " +
                 $"{faded} fade(s), {slimmed} entit(ies) made static");
