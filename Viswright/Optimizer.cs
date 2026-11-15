@@ -44,8 +44,12 @@ namespace Viswright
         /// <summary>Pass D: horizontal hints over open ground, each kept only if it measurably helps.</summary>
         public bool Hints { get; init; }
 
-        /// <summary>How long the hint search may spend compiling, in minutes.</summary>
-        public double HintMinutes { get; init; } = 15;
+        /// <summary>
+        /// How long the hint search may spend compiling, in minutes; left unset, the longer of
+        /// <see cref="Optimizer.DefaultHintMinutes"/> and <see cref="Optimizer.AutoHintCompiles"/> of the map's
+        /// compiles (<see cref="Optimizer.HintBudget"/>).
+        /// </summary>
+        public double? HintMinutes { get; init; }
 
         /// <summary>How hints are searched for: caps, cuts and boxes chosen by whole-map compiles, or the earlier tiles and wall ends.</summary>
         public HintSearch HintSearch { get; init; } = HintSearch.Regions;
@@ -337,7 +341,7 @@ namespace Viswright
                 }
                 // Then the hints Valve's own maps are made of: the ends of walls carried across open space.
                 if (RunWallHints(options, working, copy, Path.Combine(work, "hints"), name, tools, collision, samples, guard, review, lastVis,
-                    TimeSpan.FromMinutes(options.HintMinutes)) is { } walls)
+                    HintBudget(options.HintMinutes, lastVis)) is { } walls)
                 {
                     lastVis = latest = walls;
                     current = CompileMeasure.Of(walls, samples);
@@ -667,7 +671,7 @@ namespace Viswright
                 Log.Warn("hints: skipped, the search compiles the map several times and needs VVIS++ to do it in reasonable time");
                 return null;
             }
-            var budget = TimeSpan.FromMinutes(options.HintMinutes);
+            var budget = HintBudget(options.HintMinutes, reference);
             var clock = System.Diagnostics.Stopwatch.StartNew();
 
             var before = CompileMeasure.Of(reference, samples);

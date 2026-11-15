@@ -80,7 +80,7 @@
       "15",
       "30"
     ],
-    "Description": "How long Hints over open ground may spend compiling to search. Only used with Hints over open ground."
+    "Description": "How long Hints over open ground may spend compiling to search. Left off, it gets 15 minutes or five of the map's compiles, whichever is longer, so a large map is still searched. Only used with Hints over open ground."
   },
   {
     "Name": "VBSP block size",

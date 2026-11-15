@@ -131,10 +131,10 @@ sees at least 1% less, VVIS takes at most two and a half times as long (or 30 se
 last accepted go first), the map stays clear of the face limits, and collision is unchanged. If VVIS
 fails on the set - VVIS++ can, on a set whose hints each compiled alone - the hint at fault is found by
 halving and left out. A hint is toolshint on the faces that split and toolsskip on every other face: not
-solid, never drawn, unable to leak. The search needs VVIS++ and stops when its time (15 minutes by
-default) runs out. It keeps three of the map's compiles in hand before it starts a round, so a map whose
-compile takes over five minutes - a large DarkRP city takes eight to ten - needs more than the default
-just to start; it then says it did not search and how much `-hinttime` would let it. `-hintsearch tiles` uses the earlier search instead, described in
+solid, never drawn, unable to leak. The search needs VVIS++ and stops when its time runs out: `-hinttime`
+minutes, or without it the longer of 15 minutes and five of the map's compiles, so a large DarkRP city
+whose compile takes nine minutes gets 45. It keeps three compiles in hand before it starts a round; given
+a `-hinttime` too short for that, it says it did not search and how much would let it. `-hintsearch tiles` uses the earlier search instead, described in
 [Hints the way Valve places them](#hints-the-way-valve-places-them), for comparison.
 
 "More visible" is measured at the points a player can stand: positions at eye height above solid

@@ -119,7 +119,7 @@ namespace Viswright
                 HintMinutes = TryGetFlagValue(args, "-hinttime", out string? minutes)
                     ? (double.TryParse(minutes, NumberStyles.Float, CultureInfo.InvariantCulture, out double m) && m > 0 && m <= 240 ? m
                         : throw new ArgumentException($"-hinttime needs a number of minutes from 1 to 240, not '{minutes}'."))
-                    : 15,
+                    : null,
                 HintSearch = TryGetFlagValue(args, "-hintsearch", out string? search)
                     ? search!.ToLowerInvariant() switch
                     {
