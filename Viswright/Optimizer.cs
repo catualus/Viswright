@@ -768,6 +768,11 @@ namespace Viswright
             foreach (var (_, unused) in rounds.Skip(started))
                 unused.Discard();
             SourceKitConcurrency.ThrowIfCancelled();
+            if (started == 0)
+            {
+                HintsNotSearched("squares", clock.Elapsed, slowest, 2);
+                return null;
+            }
 
             for (int round = 0; round < started; round++)
             {

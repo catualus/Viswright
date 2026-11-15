@@ -132,7 +132,9 @@ last accepted go first), the map stays clear of the face limits, and collision i
 fails on the set - VVIS++ can, on a set whose hints each compiled alone - the hint at fault is found by
 halving and left out. A hint is toolshint on the faces that split and toolsskip on every other face: not
 solid, never drawn, unable to leak. The search needs VVIS++ and stops when its time (15 minutes by
-default) runs out. `-hintsearch tiles` uses the earlier search instead, described in
+default) runs out. It keeps three of the map's compiles in hand before it starts a round, so a map whose
+compile takes over five minutes - a large DarkRP city takes eight to ten - needs more than the default
+just to start; it then says it did not search and how much `-hinttime` would let it. `-hintsearch tiles` uses the earlier search instead, described in
 [Hints the way Valve places them](#hints-the-way-valve-places-them), for comparison.
 
 "More visible" is measured at the points a player can stand: positions at eye height above solid

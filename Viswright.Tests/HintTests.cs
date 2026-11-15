@@ -10,6 +10,20 @@ namespace Viswright.Tests
 {
     public class HintTests
     {
+        /// <summary>
+        /// The hint time a search needs to start: what it has used, plus the compiles it keeps in hand,
+        /// rounded up to whole minutes. rp_rockford_v2b compiles in 9.4 minutes and spent 83 seconds
+        /// ranking, so its search needs 30 minutes, where it was given 20 and quietly measured nothing.
+        /// </summary>
+        [Theory]
+        [InlineData(83, 565.1, 3, 30)]
+        [InlineData(0, 60, 3, 3)]
+        [InlineData(10, 60, 2, 3)]
+        [InlineData(0, 0, 3, 0)]
+        public void TheHintTimeNeededCoversTheCompilesKeptInHand(double elapsed, double slowest, int compiles, int minutes)
+            => Assert.Equal(minutes, Optimizer.HintMinutesNeeded(
+                TimeSpan.FromSeconds(elapsed), TimeSpan.FromSeconds(slowest), compiles));
+
         private static string Entity(int id, string classname, string origin) =>
             $"entity\r\n{{\r\n\t\"id\" \"{id}\"\r\n\t\"classname\" \"{classname}\"\r\n\t\"origin\" \"{origin}\"\r\n}}\r\n";
 

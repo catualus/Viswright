@@ -25,6 +25,22 @@ namespace Viswright
         internal const int RegionRounds = 16;
 
         /// <summary>
+        /// The whole minutes of hint time a search would need to start: what it has used so far, and
+        /// <paramref name="compiles"/> of the map's slowest compile, which it keeps in hand before starting one.
+        /// </summary>
+        internal static int HintMinutesNeeded(TimeSpan elapsed, TimeSpan slowest, int compiles)
+            => (int)Math.Ceiling((elapsed + slowest * compiles).TotalMinutes);
+
+        /// <summary>
+        /// Says that a hint search ran out of time before it compiled anything. A map whose compile takes
+        /// minutes - a large DarkRP city takes eight to ten - can need more than the default hint time just to
+        /// start, and the search then has measured nothing; saying no candidate helped would be wrong.
+        /// </summary>
+        private static void HintsNotSearched(string what, TimeSpan elapsed, TimeSpan slowest, int compiles)
+            => Log.Warn($"hints: {what} not searched: one compile of this map takes {slowest.TotalMinutes:0.#} minute(s), " +
+                $"and the search keeps time for {compiles} in hand; -hinttime {HintMinutesNeeded(elapsed, slowest, compiles)} or more lets it run");
+
+        /// <summary>
         /// Pass D, the way Valve places hints: few large candidates - caps over open-sky regions at their roof
         /// heights, vertical cuts carrying walls across open space, and once a cap is in, boxes round the
         /// buildings under it - ranked before compiling by the PVS at stake in the clusters each would cut.
@@ -90,6 +106,11 @@ namespace Viswright
                 // Leave time for the compile that proves the set.
                 if (clock.Elapsed + slowest * 3 > budget)
                 {
+                    if (round == 1)
+                    {
+                        HintsNotSearched("open ground", clock.Elapsed, slowest, 3);
+                        return null;
+                    }
                     Log.Info($"hints: time is up after {round - 1} round(s)");
                     break;
                 }

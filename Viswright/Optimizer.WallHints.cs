@@ -101,6 +101,11 @@ namespace Viswright
                 System.Threading.Tasks.Task.WaitAll(running.ToArray());
             }
             SourceKitConcurrency.ThrowIfCancelled();
+            if (started == 0)
+            {
+                HintsNotSearched("wall ends", clock.Elapsed, slowest, 2);
+                return null;
+            }
 
             static double Gain(IReadOnlyList<int> points, double[] reference, double[] cost)
             {
