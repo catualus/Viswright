@@ -137,7 +137,7 @@ namespace Viswright
                     var d = item.Data;
                     if (d.ContainsKey("shape"))
                     {
-                        foreach (var solid in HintCandidate.FromData(d).Brushes(working.MaxId()))
+                        foreach (var solid in HintCandidate.FromData(d).Brushes(working.NextIds(1) - 1))
                         {
                             working.World.Add(solid);
                             wallSolids.Add(solid);
@@ -147,7 +147,7 @@ namespace Viswright
                     }
                     if (d.ContainsKey("wallAxis"))
                     {
-                        var solid = WallHints.Brush(WallHint.FromData(d), working.MaxId());
+                        var solid = WallHints.Brush(WallHint.FromData(d), working.NextIds(1) - 1);
                         working.World.Add(solid);
                         wallSolids.Add(solid);
                         hintItems++;
@@ -385,7 +385,7 @@ namespace Viswright
         /// </summary>
         private static void WriteAdopt(VmfDocument working, string path, IEnumerable<VmfNode> changed)
         {
-            var doc = VmfDocument.Parse(working.ToString(), working.HasByteOrderMark);
+            var doc = working.Clone();
             var byId = changed.Select(n => n.Id).OfType<long>().ToHashSet();
             if (byId.Count == 0)
                 return;

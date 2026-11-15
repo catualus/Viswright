@@ -106,7 +106,7 @@ namespace Viswright
         public void Place(HintSquare square, double height)
         {
             Remove(square);
-            var solid = Slab(square, height, map.MaxId());
+            var solid = Slab(square, height, map.NextIds(1) - 1);
             map.World.Add(solid);
             placed[square] = (solid, height);
         }
