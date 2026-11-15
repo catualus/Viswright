@@ -10,6 +10,42 @@ namespace Viswright.Tests
 {
     public class HintTests
     {
+        /// <summary>
+        /// The hint time a search needs to start: what it has used, plus the compiles it keeps in hand,
+        /// rounded up to whole minutes. rp_rockford_v2b compiles in 9.4 minutes and spent 83 seconds
+        /// ranking, so its search needs 30 minutes, where it was given 20 and quietly measured nothing.
+        /// </summary>
+        [Theory]
+        [InlineData(83, 565.1, 3, 30)]
+        [InlineData(0, 60, 3, 3)]
+        [InlineData(10, 60, 2, 3)]
+        [InlineData(0, 0, 3, 0)]
+        public void TheHintTimeNeededCoversTheCompilesKeptInHand(double elapsed, double slowest, int compiles, int minutes)
+            => Assert.Equal(minutes, Optimizer.HintMinutesNeeded(
+                TimeSpan.FromSeconds(elapsed), TimeSpan.FromSeconds(slowest), compiles));
+
+        /// <summary>
+        /// Without -hinttime the search gets 15 minutes or five of the map's compiles, whichever is longer:
+        /// rockford's 9.4-minute compile gets 47 minutes, enough to start; a TF2 map stays at 15; a cached
+        /// baseline with no timings gets 15. A given -hinttime is used as it is, however short.
+        /// </summary>
+        [Theory]
+        [InlineData(null, 565.0, 2825.0)]
+        [InlineData(null, 30.0, 900.0)]
+        [InlineData(null, 180.0, 900.0)]
+        [InlineData(null, 181.0, 905.0)]
+        [InlineData(null, -1.0, 900.0)]
+        [InlineData(20.0, 565.0, 1200.0)]
+        [InlineData(5.0, -1.0, 300.0)]
+        public void TheHintTimeGrowsWithTheMapUnlessGiven(double? minutes, double compileSeconds, double budgetSeconds)
+        {
+            TimeSpan? compile = compileSeconds < 0 ? null : TimeSpan.FromSeconds(compileSeconds);
+            var budget = Optimizer.HintBudget(minutes, compile);
+            Assert.Equal(budgetSeconds, budget.TotalSeconds, 6);
+            if (minutes == null && compile is { } c)
+                Assert.True(budget >= c * 3, "the default leaves room for the compiles kept in hand");
+        }
+
         private static string Entity(int id, string classname, string origin) =>
             $"entity\r\n{{\r\n\t\"id\" \"{id}\"\r\n\t\"classname\" \"{classname}\"\r\n\t\"origin\" \"{origin}\"\r\n}}\r\n";
 

@@ -24,6 +24,48 @@ namespace Viswright
         /// <summary>Rounds of the search at most: each accepts one candidate.</summary>
         internal const int RegionRounds = 16;
 
+        /// <summary>The hint time a search gets when <c>-hinttime</c> is not given, unless the map's compiles call for more.</summary>
+        internal const double DefaultHintMinutes = 15;
+
+        /// <summary>
+        /// Without <c>-hinttime</c>, the search gets at least this many of the map's compiles: three are kept in
+        /// hand before a round starts, so five leave room for a round or two on a map whose compile takes minutes.
+        /// </summary>
+        internal const int AutoHintCompiles = 5;
+
+        /// <summary>
+        /// The time a hint search may spend: <paramref name="minutes"/> when given, and otherwise the longer of
+        /// <see cref="DefaultHintMinutes"/> and <see cref="AutoHintCompiles"/> of the reference compile. A cached
+        /// baseline has no timings, and gets the default.
+        /// </summary>
+        internal static TimeSpan HintBudget(double? minutes, WorkCompile reference)
+            => HintBudget(minutes, reference.VbspRun is { } vbsp && reference.VvisRun is { } vvis ? vbsp.Elapsed + vvis.Elapsed : null);
+
+        /// <summary>See <see cref="HintBudget(double?, WorkCompile)"/>.</summary>
+        internal static TimeSpan HintBudget(double? minutes, TimeSpan? compile)
+        {
+            if (minutes is { } given)
+                return TimeSpan.FromMinutes(given);
+            var floor = TimeSpan.FromMinutes(DefaultHintMinutes);
+            return compile is { } c && c * AutoHintCompiles > floor ? c * AutoHintCompiles : floor;
+        }
+
+        /// <summary>
+        /// The whole minutes of hint time a search would need to start: what it has used so far, and
+        /// <paramref name="compiles"/> of the map's slowest compile, which it keeps in hand before starting one.
+        /// </summary>
+        internal static int HintMinutesNeeded(TimeSpan elapsed, TimeSpan slowest, int compiles)
+            => (int)Math.Ceiling((elapsed + slowest * compiles).TotalMinutes);
+
+        /// <summary>
+        /// Says that a hint search ran out of time before it compiled anything. A map whose compile takes
+        /// minutes - a large DarkRP city takes eight to ten - can need more than the default hint time just to
+        /// start, and the search then has measured nothing; saying no candidate helped would be wrong.
+        /// </summary>
+        private static void HintsNotSearched(string what, TimeSpan elapsed, TimeSpan slowest, int compiles)
+            => Log.Warn($"hints: {what} not searched: one compile of this map takes {slowest.TotalMinutes:0.#} minute(s), " +
+                $"and the search keeps time for {compiles} in hand; -hinttime {HintMinutesNeeded(elapsed, slowest, compiles)} or more lets it run");
+
         /// <summary>
         /// Pass D, the way Valve places hints: few large candidates - caps over open-sky regions at their roof
         /// heights, vertical cuts carrying walls across open space, and once a cap is in, boxes round the
@@ -44,7 +86,7 @@ namespace Viswright
                 Log.Warn("hints: skipped, the search compiles the map several times and needs VVIS++ to do it in reasonable time");
                 return null;
             }
-            var budget = TimeSpan.FromMinutes(options.HintMinutes);
+            var budget = HintBudget(options.HintMinutes, reference);
             var clock = System.Diagnostics.Stopwatch.StartNew();
 
             var before = CompileMeasure.Of(reference, samples);
@@ -90,6 +132,11 @@ namespace Viswright
                 // Leave time for the compile that proves the set.
                 if (clock.Elapsed + slowest * 3 > budget)
                 {
+                    if (round == 1)
+                    {
+                        HintsNotSearched("open ground", clock.Elapsed, slowest, 3);
+                        return null;
+                    }
                     Log.Info($"hints: time is up after {round - 1} round(s)");
                     break;
                 }
