@@ -28,8 +28,8 @@ namespace Viswright.Review
         public static VmfDocument Build(VmfDocument working, IReadOnlyList<(int Number, ReviewItem Item)> items, SamplePoints samples,
             double[]? before, double[]? after, double[]? slack = null)
         {
-            var doc = VmfDocument.Parse(working.ToString(), working.HasByteOrderMark);
-            long id = doc.MaxId();
+            var doc = working.Clone();
+            long id = doc.NextIds(1) - 1;
             int nextGroup = doc.Root.Descendants().Where(n => n.Name.Equals("visgroup", StringComparison.OrdinalIgnoreCase))
                 .Select(n => int.TryParse(n.Get("visgroupid"), out int v) ? v : 0).DefaultIfEmpty(0).Max() + 1;
 

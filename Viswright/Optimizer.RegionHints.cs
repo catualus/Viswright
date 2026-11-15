@@ -64,7 +64,7 @@ namespace Viswright
             var placed = new Dictionary<HintCandidate, List<VmfNode>>();
             void Place(HintCandidate c)
             {
-                var solids = c.Brushes(working.MaxId());
+                var solids = c.Brushes(working.NextIds(1) - 1);
                 foreach (var s in solids)
                     working.World.Add(s);
                 placed[c] = solids;

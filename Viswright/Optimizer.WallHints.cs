@@ -65,8 +65,8 @@ namespace Viswright
                         Log.Info($"hints: time is up after {b} of {batches.Count} batch(es) of wall ends");
                         break;
                     }
-                    long id = working.MaxId();
-                    var doc = VmfDocument.Parse(working.ToString(), working.HasByteOrderMark);
+                    var doc = working.Clone();
+                    long id = doc.NextIds(8 * batches[b].Count) - 1;
                     foreach (var h in batches[b])
                     {
                         var solid = WallHints.Brush(h, id);
@@ -150,7 +150,7 @@ namespace Viswright
             var placed = new Dictionary<WallHint, VmfNode>();
             void Place(WallHint h)
             {
-                var solid = WallHints.Brush(h, working.MaxId());
+                var solid = WallHints.Brush(h, working.NextIds(1) - 1);
                 working.World.Add(solid);
                 placed[h] = solid;
             }

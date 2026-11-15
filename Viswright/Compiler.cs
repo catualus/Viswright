@@ -99,7 +99,7 @@ namespace Viswright
                 return new WorkCompile(vmf);
             }
             // A copy, so moving this one does not re-point the caller's document.
-            var copy = VmfDocument.Parse(map.ToString(), map.HasByteOrderMark);
+            var copy = map.Clone();
             VmfRelocation.RetargetInstances(copy, loadedFrom, vmf);
             copy.Save(vmf);
             return new WorkCompile(vmf);
